@@ -16,16 +16,17 @@ st.markdown("""
     }
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
     .active-card { background-color: #2b2b3d; padding: 20px; border-radius: 10px; border-left: 5px solid #00ff88; margin-bottom: 15px; }
+    .vault-card { background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 1px solid #e94560; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SECURE LOGIN ---
+# --- SECURE LOGIN (STAFF LEVEL) ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
     if not st.session_state["password_correct"]:
         st.title("🔒 Gamerarena Secure Access")
-        pwd = st.text_input("Admin Password", type="password")
+        pwd = st.text_input("Staff Password", type="password")
         if st.button("Login"):
             if pwd == "Admin@2026": 
                 st.session_state["password_correct"] = True
@@ -61,8 +62,8 @@ def calculate_price(category, duration, extra_ctrl=0):
     return cost
 
 # --- TABS ---
-tab_book, tab_active, tab_data, tab_reports = st.tabs([
-    "📝 New Session", "🕹️ Active Sessions", "📊 Live Analytics", "📅 Reports & Exports"
+tab_book, tab_active, tab_data, tab_reports, tab_analytics = st.tabs([
+    "📝 New Session", "🕹️ Active Sessions", "📊 Live Analytics", "📅 Daily Reports", "🧠 Deep Analytics"
 ])
 
 # --- TAB 1: NEW SESSION ---
@@ -102,7 +103,6 @@ with tab_book:
                         total = calculate_price(cat, duration, extra_ctrl)
                         ftime = f"{sel_h}:{sel_m} {sel_a}"
                         
-                        # Added 'duration' to the database insert
                         conn.table("sales").insert({
                             "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
                             "system": sys, "duration": duration, "total": total, 
@@ -112,10 +112,9 @@ with tab_book:
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
-# --- TAB 2: ACTIVE SESSIONS CONTROL CENTER ---
+# --- TAB 2: ACTIVE SESSIONS ---
 with tab_active:
     st.subheader("🕹️ Live Operations Control")
-    
     try:
         resp = conn.table("sales").select("*").eq("status", "Active").execute()
         active_df = pd.DataFrame(resp.data)
@@ -127,12 +126,10 @@ with tab_active:
             target_row = active_df[active_df['display_name'] == selected_session].iloc[0]
             session_id = int(target_row['id'])
             current_total = float(target_row['total'])
-            
-            # Using .get() with a default of 0.0 just in case older rows are missing it
             current_duration = float(target_row.get('duration', 0.0))
             sys_type = target_row['system']
             
-            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Total Hours so far:</b> {current_duration} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Total Hours:</b> {current_duration} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
             
             action = st.radio("What would you like to do?", ["➕ Add Extra Time", "🛑 End Session & Collect Payment"])
             
@@ -144,25 +141,19 @@ with tab_active:
                 new_total = current_total + extra_cost
                 new_duration = current_duration + extra_time
                 
-                st.info(f"Adding {extra_time} hours will add ₹{extra_cost} to the bill. New Total: ₹{new_total}")
+                st.info(f"Adding {extra_time} hours adds ₹{extra_cost}. New Total: ₹{new_total}")
                 
                 if st.button("Update Session Bill", type="primary"):
-                    # Updates BOTH the money and the total duration tracked
                     conn.table("sales").update({"total": new_total, "duration": new_duration}).eq("id", session_id).execute()
                     st.success(f"✅ Updated! New Total is ₹{new_total}.")
                     st.rerun()
                     
             elif action == "🛑 End Session & Collect Payment":
                 final_pay_mode = st.radio("How is the customer paying right now?", ["Cash", "Online / UPI"], horizontal=True)
-                
                 if st.button(f"Collect ₹{current_total} & End Session", type="primary"):
-                    conn.table("sales").update({
-                        "status": "Completed", 
-                        "method": final_pay_mode
-                    }).eq("id", session_id).execute()
-                    
+                    conn.table("sales").update({"status": "Completed", "method": final_pay_mode}).eq("id", session_id).execute()
                     st.balloons()
-                    st.success(f"✅ Payment of ₹{current_total} received via {final_pay_mode}. Session closed.")
+                    st.success("✅ Payment received. Session closed.")
                     st.rerun()
         else:
             st.info("No active sessions right now. The floor is clear!")
@@ -175,11 +166,9 @@ with tab_data:
     try:
         response = conn.table("sales").select("*").execute()
         data = pd.DataFrame(response.data)
-        
         if not data.empty:
             data['date'] = pd.to_datetime(data['date'])
             today_data = data[data['date'].dt.date == datetime.now().date()]
-            
             completed_data = today_data[today_data['status'] == 'Completed']
             active_data = today_data[today_data['status'] == 'Active']
             
@@ -190,8 +179,6 @@ with tab_data:
             m4.metric("⏳ Expected (On Floor)", f"₹{active_data['total'].sum():,.2f}")
             
             st.divider()
-            
-            # Added 'duration' to the visible dashboard table
             cols = ['date', 'entry_time', 'duration', 'customer', 'system', 'total', 'method', 'status', 'phone', 'instagram']
             df_disp = data[[c for c in cols if c in data.columns]].copy()
             df_disp.sort_values(by="date", ascending=False, inplace=True)
@@ -201,55 +188,101 @@ with tab_data:
     except Exception as e:
         st.warning("Loading data...")
 
-# --- TAB 4: REPORTS & EXPORTS ---
+# --- TAB 4: DAILY REPORTS ---
 with tab_reports:
-    st.subheader("📅 Weekly & Monthly Performance")
+    st.subheader("📥 Daily Export Center")
     try:
         response = conn.table("sales").select("*").execute()
         report_data = pd.DataFrame(response.data)
-        
         if not report_data.empty:
             report_data['date'] = pd.to_datetime(report_data['date'])
-            report_data = report_data[report_data['status'] == 'Completed']
             now_date = datetime.now()
-            
-            last_7_days = report_data[report_data['date'] >= (now_date - timedelta(days=7))]
-            last_30_days = report_data[report_data['date'] >= (now_date - timedelta(days=30))]
-            
-            r1, r2 = st.columns(2)
-            with r1:
-                st.info("### 🟢 Last 7 Days (Collected)")
-                st.write(f"**Total Revenue:** ₹{last_7_days['total'].sum():,.2f}")
-                st.write(f"**Total Sessions:** {len(last_7_days)}")
-                # Quick metric to see hardware utilization
-                st.write(f"**Hardware Hours Booked:** {last_7_days['duration'].sum()} hrs")
-            with r2:
-                st.info("### 🔵 Last 30 Days (Collected)")
-                st.write(f"**Total Revenue:** ₹{last_30_days['total'].sum():,.2f}")
-                st.write(f"**Total Sessions:** {len(last_30_days)}")
-                st.write(f"**Hardware Hours Booked:** {last_30_days['duration'].sum()} hrs")
-                
-            st.divider()
-            
-            st.subheader("📥 Download Specific Date Data")
             selected_date = st.date_input("Select a Date to Export", value=now_date.date())
+            export_data = report_data[report_data['date'].dt.date == selected_date]
             
-            all_export = pd.DataFrame(response.data)
-            all_export['date'] = pd.to_datetime(all_export['date'])
-            export_data = all_export[all_export['date'].dt.date == selected_date]
-            
-            # Keep order nice for Excel downloads
             export_cols = ['id', 'date', 'entry_time', 'duration', 'customer', 'phone', 'instagram', 'system', 'total', 'method', 'status']
             clean_export = export_data[[c for c in export_cols if c in export_data.columns]]
             
             if not export_data.empty:
                 csv = clean_export.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=f"Download Data for {selected_date}",
-                    data=csv, file_name=f"Gamerarena_Export_{selected_date}.csv", mime="text/csv",
-                    use_container_width=True
-                )
+                st.download_button(label=f"Download Data for {selected_date}", data=csv, file_name=f"Gamerarena_Export_{selected_date}.csv", mime="text/csv", use_container_width=True)
             else:
                 st.warning(f"No sessions were recorded on {selected_date}.")
     except Exception as e:
         st.warning("Loading reports...")
+
+# --- TAB 5: DEEP ANALYTICS (OWNER ONLY) ---
+with tab_analytics:
+    st.subheader("🔐 The Owner's Vault")
+    owner_pwd = st.text_input("Enter Master Passcode to view Deep Analytics", type="password", key="owner_pwd")
+    
+    if owner_pwd == "Shreenad@0511":
+        st.markdown("<div class='vault-card'>🔓 Access Granted. Welcome to Gamerarena Intelligence.</div>", unsafe_allow_html=True)
+        st.write("")
+        
+        try:
+            response = conn.table("sales").select("*").execute()
+            df = pd.DataFrame(response.data)
+            
+            if not df.empty:
+                df['date'] = pd.to_datetime(df['date'])
+                # Only analyze completed, paid sessions
+                comp_df = df[df['status'] == 'Completed'].copy()
+                
+                # --- SECTION 1: WEEK OVER WEEK (WoW) GROWTH ---
+                st.markdown("### 📊 Week-over-Week Performance")
+                now = datetime.now()
+                
+                # Filter for This Week (Last 7 Days) and Last Week (Days 8-14)
+                this_week = comp_df[comp_df['date'] >= (now - timedelta(days=7))]
+                last_week = comp_df[(comp_df['date'] >= (now - timedelta(days=14))) & (comp_df['date'] < (now - timedelta(days=7)))]
+                
+                # Calculate Totals
+                tw_rev = this_week['total'].sum()
+                lw_rev = last_week['total'].sum()
+                tw_sess = len(this_week)
+                lw_sess = len(last_week)
+                tw_hrs = this_week['duration'].sum()
+                lw_hrs = last_week['duration'].sum()
+                
+                w1, w2, w3 = st.columns(3)
+                # Streamlit metric automatically adds nice up/down arrows based on the delta
+                w1.metric("7-Day Revenue", f"₹{tw_rev:,.2f}", delta=f"₹{tw_rev - lw_rev:,.2f} vs last week")
+                w2.metric("7-Day Sessions", f"{tw_sess}", delta=f"{tw_sess - lw_sess} vs last week")
+                w3.metric("7-Day Hours Booked", f"{tw_hrs} hrs", delta=f"{tw_hrs - lw_hrs} hrs vs last week")
+                
+                st.divider()
+                
+                # --- SECTION 2: HARDWARE SHOWDOWN ---
+                st.markdown("### 🖥️ vs 🎮 Hardware Performance Showdown")
+                st.caption("Compare which machines are generating the most revenue and playtime all-time.")
+                
+                if 'system' in comp_df.columns:
+                    # Group by the system name and sum the revenue and hours
+                    hw_stats = comp_df.groupby('system').agg(
+                        Total_Revenue=('total', 'sum'),
+                        Total_Hours=('duration', 'sum'),
+                        Total_Sessions=('id', 'count')
+                    ).reset_index()
+                    
+                    # Sort by Revenue so the highest earner is at the top
+                    hw_stats = hw_stats.sort_values(by='Total_Revenue', ascending=False)
+                    
+                    # Format the dataframe for display
+                    hw_display = hw_stats.copy()
+                    hw_display['Total_Revenue'] = hw_display['Total_Revenue'].apply(lambda x: f"₹{x:,.2f}")
+                    
+                    colA, colB = st.columns([1, 1.5])
+                    with colA:
+                        st.dataframe(hw_display, use_container_width=True, hide_index=True)
+                    with colB:
+                        # Create a quick visual bar chart of revenue by system
+                        st.bar_chart(hw_stats.set_index('system')['Total_Revenue'], color="#a777e3")
+            else:
+                st.info("Not enough data to run deep analytics yet.")
+                
+        except Exception as e:
+            st.error(f"Error loading analytics: {e}")
+            
+    elif owner_pwd != "":
+        st.error("❌ Unauthorized. Incorrect Master Passcode.")
