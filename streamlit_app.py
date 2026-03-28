@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 
-# --- 1. CONFIG & STYLE ---
+# --- 1. SETTINGS & STYLE ---
 st.set_page_config(page_title="Gamerarena OS", page_icon="🎮", layout="wide")
 
 st.markdown("""
@@ -15,7 +15,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AUTHENTICATION ---
+# --- 2. LOGIN ---
 if "auth" not in st.session_state:
     st.session_state.auth = False
 
@@ -30,11 +30,11 @@ if not st.session_state.auth:
             st.error("Invalid Code")
     st.stop()
 
-# --- 3. DATABASE CONNECTION ---
+# --- 3. DATABASE ---
 try:
     conn = st.connection("supabase", type=SupabaseConnection)
 except:
-    st.error("Check Secrets.")
+    st.error("Database Error. Check your Streamlit Secrets.")
     st.stop()
 
 IST = pytz.timezone('Asia/Kolkata')
@@ -48,10 +48,10 @@ def get_price(cat, dur, extra=0):
     if "PS5" in cat: cost += (extra * 100)
     return cost
 
-# --- 4. NAVIGATION TABS ---
+# --- 4. TABS ---
 t1, t2, t3, t4, t5 = st.tabs(["📝 Entry", "🕹️ Floor", "📊 Today", "📅 Export", "🧠 Vault"])
 
-# TAB 1: NEW ENTRY
+# --- TAB 1: ENTRY ---
 with t1:
     with st.container(border=True):
         c1, c2 = st.columns(2)
@@ -61,14 +61,14 @@ with t1:
         with c2:
             sys_list = st.multiselect("Systems", list(SYSTEMS.keys()))
             now = datetime.now(IST)
-            h_col, m_col, a_col = st.columns(3)
-            sh = h_col.selectbox("HH", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
-            sm = m_col.selectbox("MM", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
-            sa = a_col.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p")=="AM" else 1)
+            h, m, ap = st.columns(3)
+            sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
+            sm = m.selectbox("MM", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
+            sa = ap.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p")=="AM" else 1)
             dur = st.number_input("Hours", 0.5, 12.0, 1.0, 0.5)
             ctrl = st.number_input("Extra Controllers", 0, 3, 0) if any("PS" in s for s in sys_list) else 0
 
-    if st.button("Start Session"):
+    if st.button("🚀 Start Session"):
         if name and sys_list:
             for s in sys_list:
                 bill = get_price(SYSTEMS[s], dur, ctrl)
@@ -76,10 +76,10 @@ with t1:
                     "customer": name, "phone": phone, "system": s, "duration": dur, 
                     "total": bill, "method": "Pending", "entry_time": f"{sh}:{sm} {sa}", "status": "Active"
                 }).execute()
-            st.success("Session Active!")
+            st.success("Session Deployed!")
             st.rerun()
 
-# TAB 2: FLOOR
+# --- TAB 2: FLOOR ---
 with t2:
     try:
         res = conn.table("sales").select("*").eq("status", "Active").execute()
@@ -92,73 +92,88 @@ with t2:
             op = st.radio("Action", ["Add Time", "End & Pay"])
             if op == "Add Time":
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5)
-                if st.button("Add"):
+                if st.button("Confirm Add"):
                     extra_cost = get_price(SYSTEMS[row['system']], ext, 0)
                     conn.table("sales").update({"total": row['total'] + extra_cost, "duration": row['duration'] + ext}).eq("id", row['id']).execute()
                     st.rerun()
             else:
                 pay = st.radio("Method", ["Cash", "Online / UPI"], horizontal=True)
-                if st.button("Close"):
+                if st.button("Collect & Close"):
                     conn.table("sales").update({"status": "Completed", "method": pay}).eq("id", row['id']).execute()
+                    st.balloons()
                     st.rerun()
         else:
-            st.info("Floor Empty.")
+            st.info("Floor is clear.")
     except: st.write("Syncing...")
 
-# TAB 3: TODAY'S LOG
+# --- TAB 3: TODAY ---
 with t3:
     try:
         raw = conn.table("sales").select("*").execute()
         df = pd.DataFrame(raw.data)
         if not df.empty:
-            df['date_dt'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata')
+            df['dt'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata')
             today = datetime.now(IST).date()
-            t_df = df[df['date_dt'].dt.date == today]
+            t_df = df[df['dt'].dt.date == today]
             comp = t_df[t_df['status'] == 'Completed']
-            act = t_df[t_df['status'] == 'Active']
             m1, m2, m3 = st.columns(3)
             m1.metric("Cash Today", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
             m2.metric("UPI Today", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
-            m3.metric("On Floor", f"₹{act['total'].sum():,.0f}")
-            st.divider()
-            df_sorted = t_df.sort_values('date_dt', ascending=False)
-            st.dataframe(df_sorted, use_container_width=True, hide_index=True)
-        else:
-            st.info("No data entries found.")
-    except: st.write("No data found.")
+            m3.metric("Running Bill", f"₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}")
+            st.dataframe(t_df.sort_values('dt', ascending=False), use_container_width=True, hide_index=True)
+    except: st.info("No logs for today yet.")
 
-# TAB 4: EXPORT
+# --- TAB 4: EXPORT (FIXED) ---
 with t4:
-    day_sel = st.date_input("Pick Date", datetime.now(IST).date())
-    if st.button("Generate Download"):
-        raw = conn.table("sales").select("*").execute()
-        edf = pd.DataFrame(raw.data)
+    st.subheader("📊 Export Records")
+    day_sel = st.date_input("Pick a Date", datetime.now(IST).date())
+    
+    # We fetch data directly here to avoid the "NoneType" error
+    raw_export = conn.table("sales").select("*").execute()
+    edf = pd.DataFrame(raw_export.data)
+    
+    if not edf.empty:
         edf['d'] = pd.to_datetime(edf['date']).dt.tz_convert('Asia/Kolkata').dt.date
-        final = edf[edf['d'] == day_sel]
-        if not final.empty:
-            st.download_button("Download CSV", final.to_csv(index=False).encode('utf-8'), f"{day_sel}.csv")
+        final_edf = edf[edf['d'] == day_sel]
+        
+        if not final_edf.empty:
+            # NO NESTED BUTTONS - Download is ready instantly
+            csv_data = final_edf.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label=f"💾 Download CSV for {day_sel}",
+                data=csv_data,
+                file_name=f"Gamerarena_{day_sel}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            st.dataframe(final_edf, hide_index=True)
         else:
-            st.warning("No records.")
+            st.warning(f"No records found for {day_sel}.")
 
-# TAB 5: VAULT
+# --- TAB 5: VAULT ---
 with t5:
-    if st.text_input("Master Key", type="password") == "Shreenad@0511":
+    st.subheader("🔐 Owner Vault")
+    if st.text_input("Master Passcode", type="password") == "Shreenad@0511":
         try:
-            raw = conn.table("sales").select("*").execute()
-            vdf = pd.DataFrame(raw.data)
+            raw_v = conn.table("sales").select("*").execute()
+            vdf = pd.DataFrame(raw_v.data)
             if not vdf.empty:
-                vdf['date_clean'] = pd.to_datetime(vdf['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+                vdf['dt'] = pd.to_datetime(vdf['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
                 pdf = vdf[vdf['status'] == 'Completed'].copy()
                 now = datetime.now(IST).replace(tzinfo=None)
                 s_tw = (now - timedelta(days=now.weekday())).date()
                 s_tm = now.date().replace(day=1)
-                wtd = pdf[pdf['date_clean'].dt.date >= s_tw]
-                mtd = pdf[pdf['date_clean'].dt.date >= s_tm]
+                
+                wtd = pdf[pdf['dt'].dt.date >= s_tw]
+                mtd = pdf[pdf['dt'].dt.date >= s_tm]
+                
                 c1, c2 = st.columns(2)
-                c1.markdown(f"<div class='metric-box'><h4>WTD</h4><h2>₹{wtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                c2.markdown(f"<div class='metric-box'><h4>MTD</h4><h2>₹{mtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c1.markdown(f"<div class='metric-box'><h4>WTD (Mon-Sun)</h4><h2>₹{wtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><h4>MTD ({now.strftime('%B')})</h4><h2>₹{mtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                
                 st.divider()
+                st.subheader("Hardware Performance")
                 h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
-                pdf['Display'] = pdf['system'].map(h_map).fillna(pdf['system'])
-                st.bar_chart(pdf.groupby('Display')['total'].sum())
-        except: st.write("Error in Analytics.")
+                pdf['Hardware'] = pdf['system'].map(h_map).fillna(pdf['system'])
+                st.bar_chart(pdf.groupby('Hardware')['total'].sum())
+        except: st.error("Data processing error.")
