@@ -34,7 +34,7 @@ if not st.session_state.auth:
 try:
     conn = st.connection("supabase", type=SupabaseConnection)
 except:
-    st.error("Database Connection Error. Check Secrets.")
+    st.error("Check Secrets.")
     st.stop()
 
 IST = pytz.timezone('Asia/Kolkata')
@@ -48,7 +48,7 @@ def get_price(cat, dur, extra=0):
     if "PS5" in cat: cost += (extra * 100)
     return cost
 
-# --- 4. NAVIGATION ---
+# --- 4. NAVIGATION TABS ---
 t1, t2, t3, t4, t5 = st.tabs(["📝 Entry", "🕹️ Floor", "📊 Today", "📅 Export", "🧠 Vault"])
 
 # TAB 1: NEW ENTRY
@@ -89,7 +89,6 @@ with t2:
             sel = st.selectbox("Select Player", active_df['label'].tolist())
             row = active_df[active_df['label'] == sel].iloc[0]
             st.markdown(f"<div class='active-card'><b>{row['customer']}</b> on {row['system']}<br>Bill: ₹{row['total']}</div>", unsafe_allow_html=True)
-            
             op = st.radio("Action", ["Add Time", "End & Pay"])
             if op == "Add Time":
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5)
@@ -104,27 +103,62 @@ with t2:
                     st.rerun()
         else:
             st.info("Floor Empty.")
-    except: st.write("Syncing Floor...")
+    except: st.write("Syncing...")
 
-# TAB 3: TODAY'S STATS
+# TAB 3: TODAY'S LOG
 with t3:
     try:
         raw = conn.table("sales").select("*").execute()
         df = pd.DataFrame(raw.data)
         if not df.empty:
-            # Date Handling
             df['date_dt'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata')
             today = datetime.now(IST).date()
             t_df = df[df['date_dt'].dt.date == today]
-            
             comp = t_df[t_df['status'] == 'Completed']
             act = t_df[t_df['status'] == 'Active']
-            
             m1, m2, m3 = st.columns(3)
-            m1.metric("Today's Cash", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
-            m2.metric("Today's UPI", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
-            m3.metric("Running Total", f"₹{act['total'].sum():,.0f}")
-            
+            m1.metric("Cash Today", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
+            m2.metric("UPI Today", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
+            m3.metric("On Floor", f"₹{act['total'].sum():,.0f}")
             st.divider()
-            st.write("### Today's Log")
-            st.dataframe(t
+            df_sorted = t_df.sort_values('date_dt', ascending=False)
+            st.dataframe(df_sorted, use_container_width=True, hide_index=True)
+        else:
+            st.info("No data entries found.")
+    except: st.write("No data found.")
+
+# TAB 4: EXPORT
+with t4:
+    day_sel = st.date_input("Pick Date", datetime.now(IST).date())
+    if st.button("Generate Download"):
+        raw = conn.table("sales").select("*").execute()
+        edf = pd.DataFrame(raw.data)
+        edf['d'] = pd.to_datetime(edf['date']).dt.tz_convert('Asia/Kolkata').dt.date
+        final = edf[edf['d'] == day_sel]
+        if not final.empty:
+            st.download_button("Download CSV", final.to_csv(index=False).encode('utf-8'), f"{day_sel}.csv")
+        else:
+            st.warning("No records.")
+
+# TAB 5: VAULT
+with t5:
+    if st.text_input("Master Key", type="password") == "Shreenad@0511":
+        try:
+            raw = conn.table("sales").select("*").execute()
+            vdf = pd.DataFrame(raw.data)
+            if not vdf.empty:
+                vdf['date_clean'] = pd.to_datetime(vdf['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+                pdf = vdf[vdf['status'] == 'Completed'].copy()
+                now = datetime.now(IST).replace(tzinfo=None)
+                s_tw = (now - timedelta(days=now.weekday())).date()
+                s_tm = now.date().replace(day=1)
+                wtd = pdf[pdf['date_clean'].dt.date >= s_tw]
+                mtd = pdf[pdf['date_clean'].dt.date >= s_tm]
+                c1, c2 = st.columns(2)
+                c1.markdown(f"<div class='metric-box'><h4>WTD</h4><h2>₹{wtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><h4>MTD</h4><h2>₹{mtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                st.divider()
+                h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
+                pdf['Display'] = pdf['system'].map(h_map).fillna(pdf['system'])
+                st.bar_chart(pdf.groupby('Display')['total'].sum())
+        except: st.write("Error in Analytics.")
