@@ -2,8 +2,9 @@ import streamlit as st
 from st_supabase_connection import SupabaseConnection
 import pandas as pd
 from datetime import datetime, timedelta
+import pytz
 
-# --- PAGE CONFIG & STYLING ---
+# --- 1. PAGE CONFIG & STYLING ---
 st.set_page_config(page_title="Gamerarena OS", page_icon="🎮", layout="wide")
 
 st.markdown("""
@@ -21,7 +22,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- SECURE LOGIN (STAFF LEVEL) ---
+# --- 2. SECURE LOGIN ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -40,12 +41,10 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- MAIN SETUP ---
-st.title("🎮 Gamerarena Central OS")
-st.caption("Palghar's Premier Gaming Destination | Admin Mode")
+# --- 3. CORE LOGIC & PRICING ---
 conn = st.connection("supabase", type=SupabaseConnection)
+IST = pytz.timezone('Asia/Kolkata')
 
-# --- PRICING & HARDWARE ---
 PRICES_1HR = {"PC Gaming": 100, "PS5 Gaming": 150, "Racing Sim": 250}
 PRICES_30MIN = {"PC Gaming": 70, "PS5 Gaming": 100, "Racing Sim": 150}
 SYSTEMS = {
@@ -61,158 +60,153 @@ def calculate_price(category, duration, extra_ctrl=0):
     if "PS5" in category: cost += (extra_ctrl * 100)
     return cost
 
-# --- TABS ---
-tab_book, tab_active, tab_data, tab_reports, tab_analytics = st.tabs([
-    "📝 New Session", "🕹️ Active Sessions", "📊 Live Analytics", "📅 Daily Reports", "🧠 Deep Analytics"
-])
+# --- 4. TABS ---
+t1, t2, t3, t4, t5 = st.tabs(["📝 New Session", "🕹️ Active Floor", "📊 Live Stats", "📅 Daily Reports", "🧠 Owner Vault"])
 
-# --- TAB 1: NEW SESSION ---
-with tab_book:
+# --- TAB 1: NEW ENTRY ---
+with t1:
     with st.container(border=True):
-        col1, col2 = st.columns(2, gap="large")
-        with col1:
-            st.subheader("👤 Player Profile")
-            cust_name = st.text_input("Gamer Name")
-            cust_phone = st.text_input("Contact Number")
-            cust_insta = st.text_input("Instagram ID")
-        with col2:
-            st.subheader("🕹️ Session Details")
-            selected_systems = st.multiselect("Select Systems", list(SYSTEMS.keys()))
-            st.write("Time In:")
-            now = datetime.now()
-            t1, t2, t3 = st.columns(3)
-            sel_h = t1.selectbox("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
-            sel_m = t2.selectbox("Minute", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
-            sel_a = t3.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1)
-            duration = st.number_input("Duration (Hours)", min_value=0.5, max_value=12.0, step=0.5, value=1.0)
-            has_ps5 = any("PS" in sys for sys in selected_systems)
-            extra_ctrl = st.number_input("Extra Controllers (₹100 each)", 0, 3, 0) if has_ps5 else 0
-            
-    if st.button("🚀 Confirm & Deploy Session", use_container_width=True):
-        if not cust_name or not selected_systems:
-            st.error("⚠️ Please provide a Name and select a system.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("👤 Gamer Profile")
+            name = st.text_input("Name")
+            phone = st.text_input("Phone")
+            insta = st.text_input("Instagram")
+        with c2:
+            st.subheader("🕹️ Session Setup")
+            selected = st.multiselect("Select Systems", list(SYSTEMS.keys()))
+            st.write("Entry Time:")
+            now = datetime.now(IST)
+            h_col, m_col, a_col = st.columns(3)
+            sh = h_col.selectbox("HH", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
+            sm = m_col.selectbox("MM", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
+            sa = a_col.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p")=="AM" else 1)
+            dur = st.number_input("Duration (Hrs)", 0.5, 12.0, 1.0, 0.5)
+            has_ps5 = any("PS" in s for s in selected)
+            ctrl = st.number_input("Extra Controllers", 0, 3, 0) if has_ps5 else 0
+
+    if st.button("🚀 Start Session", use_container_width=True):
+        if not name or not selected:
+            st.error("Missing Name or System Selection")
         else:
             try:
-                for sys in selected_systems:
-                    cat = SYSTEMS[sys]
-                    total = calculate_price(cat, duration, extra_ctrl)
-                    ftime = f"{sel_h}:{sel_m} {sel_a}"
+                for s in selected:
+                    cat = SYSTEMS[s]
+                    bill = calculate_price(cat, dur, ctrl)
+                    t_str = f"{sh}:{sm} {sa}"
                     conn.table("sales").insert({
-                        "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
-                        "system": sys, "duration": duration, "total": total, 
-                        "method": "Pending", "entry_time": ftime, "status": "Active" 
+                        "customer": name, "phone": phone, "instagram": insta,
+                        "system": s, "duration": dur, "total": bill, 
+                        "method": "Pending", "entry_time": t_str, "status": "Active" 
                     }).execute()
-                st.success(f"✅ Session Started for {cust_name}!")
+                st.success(f"Deployed! Expected: ₹{bill}")
             except Exception as e:
-                st.error(f"❌ Error: {e}")
+                st.error(f"Error: {e}")
 
-# --- TAB 2: ACTIVE SESSIONS ---
-with tab_active:
-    st.subheader("🕹️ Live Operations Control")
+# --- TAB 2: ACTIVE FLOOR ---
+with t2:
+    st.subheader("🕹️ Live Operations")
     try:
-        resp = conn.table("sales").select("*").eq("status", "Active").execute()
-        active_df = pd.DataFrame(resp.data)
-        if not active_df.empty:
-            active_df['display_name'] = active_df['customer'] + " | " + active_df['system'] + " | Bill: ₹" + active_df['total'].astype(str)
-            selected_session = st.selectbox("Select Player:", active_df['display_name'].tolist())
-            target_row = active_df[active_df['display_name'] == selected_session].iloc[0]
-            session_id, current_total, current_duration = int(target_row['id']), float(target_row['total']), float(target_row.get('duration', 0.0))
-            sys_type = target_row['system']
-            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>Hardware:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Hours:</b> {current_duration} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
-            action = st.radio("Action:", ["➕ Add Extra Time", "🛑 End Session & Pay"])
-            if action == "➕ Add Extra Time":
-                extra_time = st.number_input("Add Hours", 0.5, 5.0, 0.5)
-                extra_cost = calculate_price(SYSTEMS[sys_type], extra_time, 0)
+        res = conn.table("sales").select("*").eq("status", "Active").execute()
+        active = pd.DataFrame(res.data)
+        if not active.empty:
+            active['label'] = active['customer'] + " | " + active['system']
+            sel = st.selectbox("Select Active Player", active['label'].tolist())
+            row = active[active['label'] == sel].iloc[0]
+            st.markdown(f"<div class='active-card'><b>{row['customer']}</b> on {row['system']}<br>Bill: ₹{row['total']} | Time: {row['entry_time']}</div>", unsafe_allow_html=True)
+            
+            mode = st.radio("Action", ["Extend Time", "Collect & End"])
+            if mode == "Extend Time":
+                ext = st.number_input("Add Hours", 0.5, 5.0, 0.5)
                 if st.button("Update Bill"):
-                    conn.table("sales").update({"total": current_total + extra_cost, "duration": current_duration + extra_time}).eq("id", session_id).execute()
+                    extra = calculate_price(SYSTEMS[row['system']], ext, 0)
+                    conn.table("sales").update({"total": row['total'] + extra, "duration": row['duration'] + ext}).eq("id", row['id']).execute()
                     st.rerun()
-            elif action == "🛑 End Session & Pay":
-                pay_mode = st.radio("Payment:", ["Cash", "Online / UPI"], horizontal=True)
-                if st.button("Collect & Close"):
-                    conn.table("sales").update({"status": "Completed", "method": pay_mode}).eq("id", session_id).execute()
+            else:
+                pay = st.radio("Payment", ["Cash", "Online / UPI"], horizontal=True)
+                if st.button("Finish Session"):
+                    conn.table("sales").update({"status": "Completed", "method": pay}).eq("id", row['id']).execute()
                     st.balloons()
                     st.rerun()
         else:
-            st.info("No active sessions right now.")
-    except Exception as e:
-        st.warning(f"Connection wait... {e}")
+            st.info("No active sessions.")
+    except:
+        st.write("Connecting...")
 
-# --- TAB 3: LIVE ANALYTICS ---
-with tab_data:
+# --- TAB 3: LIVE STATS ---
+with t3:
     st.subheader("📈 Today's Performance")
     try:
-        response = conn.table("sales").select("*").execute()
-        data = pd.DataFrame(response.data)
-        if not data.empty:
-            data['date'] = pd.to_datetime(data['date'])
-            today_data = data[data['date'].dt.date == datetime.now().date()]
-            completed_data, active_data = today_data[today_data['status'] == 'Completed'], today_data[today_data['status'] == 'Active']
+        raw = conn.table("sales").select("*").execute()
+        df = pd.DataFrame(raw.data)
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata')
+            today = datetime.now(IST).date()
+            t_df = df[df['date'].dt.date == today]
+            comp = t_df[t_df['status'] == 'Completed']
+            act = t_df[t_df['status'] == 'Active']
+            
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("💰 Collected", f"₹{completed_data['total'].sum():,.2f}")
-            m2.metric("💵 Cash", f"₹{completed_data[completed_data['method'] == 'Cash']['total'].sum():,.2f}")
-            m3.metric("📱 UPI", f"₹{completed_data[completed_data['method'] == 'Online / UPI']['total'].sum():,.2f}")
-            m4.metric("⏳ Pending", f"₹{active_data['total'].sum():,.2f}")
-            st.divider()
-            st.dataframe(data.sort_values(by='date', ascending=False), use_container_width=True, hide_index=True)
+            m1.metric("Total Collected", f"₹{comp['total'].sum():,.0f}")
+            m2.metric("Cash", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
+            m3.metric("UPI", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
+            m4.metric("On Floor", f"₹{act['total'].sum():,.0f}")
+            st.dataframe(t_df.sort_values('date', ascending=False), use_container_width=True, hide_index=True)
     except:
-        st.info("Ready for first entry.")
+        st.write("Awaiting Data...")
 
 # --- TAB 4: DAILY REPORTS ---
-with tab_reports:
-    st.subheader("📥 Export Center")
+with t4:
+    st.subheader("📅 Export Records")
     try:
-        response = conn.table("sales").select("*").execute()
-        report_data = pd.DataFrame(response.data)
-        if not report_data.empty:
-            report_data['date'] = pd.to_datetime(report_data['date'])
-            selected_date = st.date_input("Export Date", value=datetime.now().date())
-            export_df = report_data[report_data['date'].dt.date == selected_date]
-            if not export_df.empty:
-                st.download_button("Download CSV", export_df.to_csv(index=False).encode('utf-8'), f"Export_{selected_date}.csv", "text/csv")
-            else:
-                st.warning("No data for this date.")
+        raw = conn.table("sales").select("*").execute()
+        rdf = pd.DataFrame(raw.data)
+        if not rdf.empty:
+            day = st.date_input("Select Date", datetime.now(IST).date())
+            rdf['date_only'] = pd.to_datetime(rdf['date']).dt.date
+            edf = rdf[rdf['date_only'] == day]
+            if not edf.empty:
+                st.download_button("Download CSV", edf.to_csv(index=False).encode('utf-8'), f"Report_{day}.csv", "text/csv")
+                st.dataframe(edf, hide_index=True)
     except:
-        st.info("No data.")
+        st.write("No data.")
 
-# --- TAB 5: DEEP ANALYTICS ---
-with tab_analytics:
-    st.subheader("🔐 The Owner's Vault")
-    owner_pwd = st.text_input("Master Passcode", type="password")
-    if owner_pwd == "Shreenad@0511":
-        st.markdown("<div class='vault-card'>🔓 Access Granted.</div>", unsafe_allow_html=True)
+# --- TAB 5: OWNER VAULT ---
+with t5:
+    st.subheader("🔐 Gamerarena Intelligence")
+    if st.text_input("Master Key", type="password") == "Shreenad@0511":
         try:
-            response = conn.table("sales").select("*").execute()
-            df = pd.DataFrame(response.data)
+            raw = conn.table("sales").select("*").execute()
+            df = pd.DataFrame(raw.data)
             if not df.empty:
-                df['date'] = pd.to_datetime(df['date'])
-                comp_df = df[df['status'] == 'Completed'].copy()
-                today = datetime.now().date()
-                s_w, s_m = today - timedelta(days=today.weekday()), today.replace(day=1)
-                l_w_s, l_w_e = s_w - timedelta(days=7), s_w - timedelta(days=1)
-                l_m_e = s_m - timedelta(days=1)
-                l_m_s = l_m_e.replace(day=1)
+                df['date'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+                pdf = df[df['status'] == 'Completed'].copy()
+                now = datetime.now(IST).replace(tzinfo=None)
                 
-                # Metrics
-                wtd = comp_df[comp_df['date'].dt.date >= s_w]
-                mtd = comp_df[comp_df['date'].dt.date >= s_m]
-                lw = comp_df[(comp_df['date'].dt.date >= l_w_s) & (comp_df['date'].dt.date <= l_w_e)]
-                lm = comp_df[(comp_df['date'].dt.date >= l_m_s) & (comp_df['date'].dt.date <= l_m_e)]
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown(f"<div class='metric-box'><h4>WTD</h4><h2>₹{wtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='metric-box'><h4>MTD</h4><h2>₹{mtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
-                with c2:
-                    st.markdown(f"<div class='metric-box'><h4>Last Week</h4><h2>₹{lw['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='metric-box'><h4>Last Month</h4><h2>₹{lm['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
-                
+                # Logic
+                s_tw = (now - timedelta(days=now.weekday())).date() # Mon
+                s_lw, e_lw = s_tw - timedelta(days=7), s_tw - timedelta(days=1)
+                s_tm, s_lm = now.date().replace(day=1), (now.date().replace(day=1) - timedelta(days=1)).replace(day=1)
+                e_lm = now.date().replace(day=1) - timedelta(days=1)
+
+                wtd = pdf[pdf['date'].dt.date >= s_tw]
+                lw = pdf[(pdf['date'].dt.date >= s_lw) & (pdf['date'].dt.date <= e_lw)]
+                mtd = pdf[pdf['date'].dt.date >= s_tm]
+                lm = pdf[(pdf['date'].dt.date >= s_lm) & (pdf['date'].dt.date <= e_lm)]
+
+                st.markdown("### 📊 Performance Metrics")
+                a, b = st.columns(2)
+                a.markdown(f"<div class='metric-box'><h4>WTD (Mon-Sun)</h4><h2>₹{wtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                a.markdown(f"<div class='metric-box'><h4>MTD ({now.strftime('%B')})</h4><h2>₹{mtd['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                b.markdown(f"<div class='metric-box'><h4>Last Week</h4><h2>₹{lw['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                b.markdown(f"<div class='metric-box'><h4>Last Month</h4><h2>₹{lm['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+
                 st.divider()
                 st.subheader("🖥️ Hardware Performance")
-                hw_map = {"PC1": "PC", "PC2": "PC", "PS1": "Playstation 5", "PS2": "Playstation 5", "PS3": "Playstation 5", "SIM1": "Racing Simulator"}
-                comp_df['display_sys'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
-                hw_stats = comp_df.groupby('display_sys').agg(Rev=('total', 'sum'), Hrs=('duration', 'sum')).reset_index()
-                ca, cb = st.columns([1, 1.5])
-                ca.dataframe(hw_stats, hide_index=True)
-                cb.bar_chart(hw_stats.set_index('display_sys')['Rev'])
+                h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
+                pdf['Sys_Name'] = pdf['system'].map(h_map).fillna(pdf['system'])
+                hw = pdf.groupby('Sys_Name').agg(Revenue=('total','sum'), Hours=('duration','sum')).reset_index()
+                st.bar_chart(hw.set_index('Sys_Name')['Revenue'])
+                st.dataframe(hw, hide_index=True)
         except Exception as e:
             st.error(f"Error: {e}")
