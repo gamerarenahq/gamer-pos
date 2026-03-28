@@ -1,2 +1,2 @@
 streamlit
-st-gsheets-connection
+st-supabase-connection
