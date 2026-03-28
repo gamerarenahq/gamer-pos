@@ -11,14 +11,11 @@ st.markdown("""
     .block-container { padding-top: 2rem; }
     .stButton>button {
         background: linear-gradient(135deg, #6e8efb, #a777e3);
-        color: white; border-radius: 10px; border: none;
-        padding: 12px 24px; font-weight: 700; font-size: 16px; transition: 0.3s ease;
+        color: white; border-radius: 8px; border: none;
+        padding: 10px 20px; font-weight: bold; transition: 0.3s;
     }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 15px rgba(0,0,0,0.2); }
-    div[data-testid="metric-container"] {
-        background-color: #1e1e2f; border: 1px solid #2d2d44;
-        padding: 15px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+    .active-card { background-color: #2b2b3d; padding: 20px; border-radius: 10px; border-left: 5px solid #00ff88; margin-bottom: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -26,7 +23,6 @@ st.markdown("""
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
-
     if not st.session_state["password_correct"]:
         st.title("🔒 Gamerarena Secure Access")
         pwd = st.text_input("Admin Password", type="password")
@@ -35,7 +31,7 @@ def check_password():
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
-                st.error("❌ Incorrect Password. Access Denied.")
+                st.error("❌ Incorrect Password.")
         return False
     return True
 
@@ -45,10 +41,9 @@ if not check_password():
 # --- MAIN SETUP ---
 st.title("🎮 Gamerarena Central OS")
 st.caption("Palghar's Premier Gaming Destination | Admin Mode")
-
 conn = st.connection("supabase", type=SupabaseConnection)
 
-# --- SMART PRICING LOGIC ---
+# --- STRICT PRICING LOGIC ---
 PRICES_1HR = {"PC Gaming": 100, "PS5 Gaming": 150, "Racing Sim": 250}
 PRICES_30MIN = {"PC Gaming": 70, "PS5 Gaming": 100, "Racing Sim": 150}
 SYSTEMS = {
@@ -58,15 +53,24 @@ SYSTEMS = {
 
 def calculate_price(category, duration, extra_ctrl=0):
     full_hours = int(duration)
-    is_half_hour = (duration % 1) == 0.5
+    is_half_hour = (duration % 1) != 0 # Checks if there is a .5 at the end
+    
+    # 1. Calculate Base Hours
     cost = (full_hours * PRICES_1HR[category])
-    if is_half_hour: cost += PRICES_30MIN[category]
-    if "PS5" in category: cost += (extra_ctrl * 100)
+    
+    # 2. Add 30 Min Pricing if applicable
+    if is_half_hour: 
+        cost += PRICES_30MIN[category]
+        
+    # 3. Add Extra Controllers
+    if "PS5" in category: 
+        cost += (extra_ctrl * 100)
+        
     return cost
 
 # --- TABS ---
-tab_book, tab_extend, tab_data, tab_reports = st.tabs([
-    "📝 New Session", "⏳ Extend Time", "📊 Live Analytics", "📅 Reports & Exports"
+tab_book, tab_active, tab_data, tab_reports = st.tabs([
+    "📝 New Session", "🕹️ Active Sessions", "📊 Live Analytics", "📅 Reports & Exports"
 ])
 
 # --- TAB 1: NEW SESSION ---
@@ -83,17 +87,12 @@ with tab_book:
             st.subheader("🕹️ Session Details")
             selected_systems = st.multiselect("Select Systems", list(SYSTEMS.keys()))
             
-            # --- CUSTOM TIME DROPDOWNS (Defaults to Current Time) ---
             st.write("Time In:")
             now = datetime.now()
-            hours_list = [f"{i:02d}" for i in range(1, 13)]
-            mins_list = [f"{i:02d}" for i in range(60)]
-            ampm_list = ["AM", "PM"]
-            
             t1, t2, t3 = st.columns(3)
-            sel_h = t1.selectbox("Hour", hours_list, index=hours_list.index(now.strftime("%I")))
-            sel_m = t2.selectbox("Minute", mins_list, index=mins_list.index(now.strftime("%M")))
-            sel_a = t3.selectbox("AM/PM", ampm_list, index=ampm_list.index(now.strftime("%p")))
+            sel_h = t1.selectbox("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
+            sel_m = t2.selectbox("Minute", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
+            sel_a = t3.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1)
             
             duration = st.number_input("Duration (Hours)", min_value=0.5, max_value=12.0, step=0.5, value=1.0)
             
@@ -106,51 +105,72 @@ with tab_book:
             st.error("⚠️ Please provide a Name and select a system.")
         else:
             try:
-                with st.spinner("Syncing..."):
+                with st.spinner("Starting Session..."):
                     for sys in selected_systems:
                         cat = SYSTEMS[sys]
                         total = calculate_price(cat, duration, extra_ctrl)
-                        ftime = f"{sel_h}:{sel_m} {sel_a}" # Merging the dropdowns
+                        ftime = f"{sel_h}:{sel_m} {sel_a}"
                         
+                        # Note: status is strictly set to 'Active'
                         conn.table("sales").insert({
                             "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
-                            "system": sys, "total": total, "method": pay_mode, "entry_time": ftime
+                            "system": sys, "total": total, "method": pay_mode, "entry_time": ftime,
+                            "status": "Active" 
                         }).execute()
-                st.success(f"✅ Logged! Collect: ₹{total} per system.")
+                st.success(f"✅ Session Started! Collect: ₹{total} per system.")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
-# --- TAB 2: EXTEND TIME ---
-with tab_extend:
-    st.subheader("⏳ Add time to an active session")
+# --- TAB 2: ACTIVE SESSIONS CONTROL CENTER ---
+with tab_active:
+    st.subheader("🕹️ Live Operations Control")
+    st.caption("Manage players currently on the floor. Add time or end their sessions here.")
+    
     try:
-        resp = conn.table("sales").select("*").execute()
-        df_ext = pd.DataFrame(resp.data)
+        # Fetch ONLY Active sessions
+        resp = conn.table("sales").select("*").eq("status", "Active").execute()
+        active_df = pd.DataFrame(resp.data)
         
-        if not df_ext.empty:
-            df_ext['date'] = pd.to_datetime(df_ext['date'])
-            today_ext = df_ext[df_ext['date'].dt.date == datetime.now().date()].copy()
+        if not active_df.empty:
+            # Create a clean dropdown for active players
+            active_df['display_name'] = active_df['customer'] + " | " + active_df['system'] + " | Current Bill: ₹" + active_df['total'].astype(str)
+            selected_session = st.selectbox("Select Player to Manage:", active_df['display_name'].tolist())
             
-            if not today_ext.empty:
-                today_ext['display_name'] = today_ext['customer'] + " | " + today_ext['system'] + " | Current Bill: ₹" + today_ext['total'].astype(str)
-                selected_session = st.selectbox("Select Active Player", today_ext['display_name'].tolist())
-                extra_time = st.number_input("Additional Hours", min_value=0.5, max_value=5.0, step=0.5, value=0.5)
+            target_row = active_df[active_df['display_name'] == selected_session].iloc[0]
+            session_id = int(target_row['id'])
+            current_total = float(target_row['total'])
+            sys_type = target_row['system']
+            
+            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
+            
+            action = st.radio("What would you like to do?", ["➕ Add Extra Time", "🛑 End Session"])
+            
+            if action == "➕ Add Extra Time":
+                extra_time = st.number_input("Additional Hours to Add", min_value=0.5, max_value=5.0, step=0.5, value=0.5)
                 
-                if st.button("➕ Update & Add Time", type="primary"):
-                    target_row = today_ext[today_ext['display_name'] == selected_session].iloc[0]
-                    session_id = int(target_row['id'])
-                    current_total = float(target_row['total'])
-                    
-                    category = SYSTEMS[target_row['system']]
-                    extra_cost = calculate_price(category, extra_time, 0)
-                    new_total = current_total + extra_cost
-                    
+                # Calculate ONLY the cost of the extra time (no controllers charged again)
+                category = SYSTEMS[sys_type]
+                extra_cost = calculate_price(category, extra_time, 0)
+                new_total = current_total + extra_cost
+                
+                st.info(f"Adding {extra_time} hours will add ₹{extra_cost} to the bill. New Total: ₹{new_total}")
+                
+                if st.button("Update Session Bill", type="primary"):
                     conn.table("sales").update({"total": new_total}).eq("id", session_id).execute()
-                    st.success(f"✅ Success! Added ₹{extra_cost} to the bill. New Total to collect is ₹{new_total}.")
-            else:
-                st.info("No active sessions logged today yet.")
+                    st.success(f"✅ Updated! New Total to collect is ₹{new_total}.")
+                    st.rerun()
+                    
+            elif action == "🛑 End Session":
+                st.warning("This will mark the session as 'Completed' and remove it from this active list.")
+                if st.button("Confirm End Session", type="primary"):
+                    conn.table("sales").update({"status": "Completed"}).eq("id", session_id).execute()
+                    st.balloons()
+                    st.success(f"✅ Session Ended for {target_row['customer']}. Total Collected: ₹{current_total}.")
+                    st.rerun()
+        else:
+            st.info("No active sessions right now. The floor is clear!")
     except Exception as e:
-        st.warning("Loading database...")
+        st.warning("Loading active sessions... If you just updated the database, please wait a moment.")
 
 # --- TAB 3: LIVE ANALYTICS ---
 with tab_data:
@@ -169,7 +189,7 @@ with tab_data:
             m3.metric("📱 Online / UPI", f"₹{today_data[today_data['method'] == 'Online / UPI']['total'].sum():,.2f}")
             
             st.divider()
-            cols = ['date', 'entry_time', 'customer', 'system', 'total', 'method', 'phone', 'instagram']
+            cols = ['date', 'entry_time', 'customer', 'system', 'total', 'method', 'status', 'phone', 'instagram']
             df_disp = data[[c for c in cols if c in data.columns]].copy()
             df_disp.sort_values(by="date", ascending=False, inplace=True)
             st.dataframe(df_disp, use_container_width=True, hide_index=True)
@@ -189,7 +209,6 @@ with tab_reports:
             report_data['date'] = pd.to_datetime(report_data['date'])
             now_date = datetime.now()
             
-            # Calculate Week and Month Data
             last_7_days = report_data[report_data['date'] >= (now_date - timedelta(days=7))]
             last_30_days = report_data[report_data['date'] >= (now_date - timedelta(days=30))]
             
@@ -205,10 +224,8 @@ with tab_reports:
                 
             st.divider()
             
-            # Custom Date Downloader
             st.subheader("📥 Download Specific Date Data")
             selected_date = st.date_input("Select a Date to Export", value=now_date.date())
-            
             export_data = report_data[report_data['date'].dt.date == selected_date]
             
             if not export_data.empty:
