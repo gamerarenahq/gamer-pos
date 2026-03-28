@@ -69,4 +69,44 @@ tab_book, tab_active, tab_data, tab_reports, tab_analytics = st.tabs([
 
 # --- TAB 1: NEW SESSION ---
 with tab_book:
-    with st.container(border=True
+    with st.container(border=True):
+        col1, col2 = st.columns(2, gap="large")
+        with col1:
+            st.subheader("👤 Player Profile")
+            cust_name = st.text_input("Gamer Name")
+            cust_phone = st.text_input("Contact Number")
+            cust_insta = st.text_input("Instagram ID")
+            
+        with col2:
+            st.subheader("🕹️ Session Details")
+            selected_systems = st.multiselect("Select Systems", list(SYSTEMS.keys()))
+            
+            st.write("Time In:")
+            now = datetime.now()
+            t1, t2, t3 = st.columns(3)
+            sel_h = t1.selectbox("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
+            sel_m = t2.selectbox("Minute", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
+            sel_a = t3.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1)
+            
+            duration = st.number_input("Duration (Hours)", min_value=0.5, max_value=12.0, step=0.5, value=1.0)
+            
+            has_ps5 = any("PS" in sys for sys in selected_systems)
+            extra_ctrl = st.number_input("Extra Controllers (₹100 each)", 0, 3, 0) if has_ps5 else 0
+            
+    if st.button("🚀 Confirm & Deploy Session", use_container_width=True):
+        if not cust_name or not selected_systems:
+            st.error("⚠️ Please provide a Name and select a system.")
+        else:
+            try:
+                with st.spinner("Starting Session..."):
+                    for sys in selected_systems:
+                        cat = SYSTEMS[sys]
+                        total = calculate_price(cat, duration, extra_ctrl)
+                        ftime = f"{sel_h}:{sel_m} {sel_a}"
+                        
+                        conn.table("sales").insert({
+                            "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
+                            "system": sys, "duration": duration, "total": total, 
+                            "method": "Pending", "entry_time": ftime, "status": "Active" 
+                        }).execute()
+                st.success(f"✅ Session Started! Bill currently stands
