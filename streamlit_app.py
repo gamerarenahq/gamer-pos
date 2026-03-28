@@ -91,8 +91,6 @@ with tab_book:
             has_ps5 = any("PS" in sys for sys in selected_systems)
             extra_ctrl = st.number_input("Extra Controllers (₹100 each)", 0, 3, 0) if has_ps5 else 0
             
-            # REMOVED PAYMENT RADIO BUTTON FROM HERE
-            
     if st.button("🚀 Confirm & Deploy Session", use_container_width=True):
         if not cust_name or not selected_systems:
             st.error("⚠️ Please provide a Name and select a system.")
@@ -104,11 +102,11 @@ with tab_book:
                         total = calculate_price(cat, duration, extra_ctrl)
                         ftime = f"{sel_h}:{sel_m} {sel_a}"
                         
-                        # Set Method to "Pending" automatically
+                        # Added 'duration' to the database insert
                         conn.table("sales").insert({
                             "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
-                            "system": sys, "total": total, "method": "Pending", "entry_time": ftime,
-                            "status": "Active" 
+                            "system": sys, "duration": duration, "total": total, 
+                            "method": "Pending", "entry_time": ftime, "status": "Active" 
                         }).execute()
                 st.success(f"✅ Session Started! Bill currently stands at ₹{total}.")
             except Exception as e:
@@ -129,9 +127,12 @@ with tab_active:
             target_row = active_df[active_df['display_name'] == selected_session].iloc[0]
             session_id = int(target_row['id'])
             current_total = float(target_row['total'])
+            
+            # Using .get() with a default of 0.0 just in case older rows are missing it
+            current_duration = float(target_row.get('duration', 0.0))
             sys_type = target_row['system']
             
-            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Total Hours so far:</b> {current_duration} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
             
             action = st.radio("What would you like to do?", ["➕ Add Extra Time", "🛑 End Session & Collect Payment"])
             
@@ -139,21 +140,22 @@ with tab_active:
                 extra_time = st.number_input("Additional Hours to Add", min_value=0.5, max_value=5.0, step=0.5, value=0.5)
                 category = SYSTEMS[sys_type]
                 extra_cost = calculate_price(category, extra_time, 0)
+                
                 new_total = current_total + extra_cost
+                new_duration = current_duration + extra_time
                 
                 st.info(f"Adding {extra_time} hours will add ₹{extra_cost} to the bill. New Total: ₹{new_total}")
                 
                 if st.button("Update Session Bill", type="primary"):
-                    conn.table("sales").update({"total": new_total}).eq("id", session_id).execute()
+                    # Updates BOTH the money and the total duration tracked
+                    conn.table("sales").update({"total": new_total, "duration": new_duration}).eq("id", session_id).execute()
                     st.success(f"✅ Updated! New Total is ₹{new_total}.")
                     st.rerun()
                     
             elif action == "🛑 End Session & Collect Payment":
-                # MOVED PAYMENT RADIO BUTTON TO HERE
                 final_pay_mode = st.radio("How is the customer paying right now?", ["Cash", "Online / UPI"], horizontal=True)
                 
                 if st.button(f"Collect ₹{current_total} & End Session", type="primary"):
-                    # Update BOTH status and method
                     conn.table("sales").update({
                         "status": "Completed", 
                         "method": final_pay_mode
@@ -178,7 +180,6 @@ with tab_data:
             data['date'] = pd.to_datetime(data['date'])
             today_data = data[data['date'].dt.date == datetime.now().date()]
             
-            # Separate Completed money vs Pending money
             completed_data = today_data[today_data['status'] == 'Completed']
             active_data = today_data[today_data['status'] == 'Active']
             
@@ -189,7 +190,9 @@ with tab_data:
             m4.metric("⏳ Expected (On Floor)", f"₹{active_data['total'].sum():,.2f}")
             
             st.divider()
-            cols = ['date', 'entry_time', 'customer', 'system', 'total', 'method', 'status', 'phone', 'instagram']
+            
+            # Added 'duration' to the visible dashboard table
+            cols = ['date', 'entry_time', 'duration', 'customer', 'system', 'total', 'method', 'status', 'phone', 'instagram']
             df_disp = data[[c for c in cols if c in data.columns]].copy()
             df_disp.sort_values(by="date", ascending=False, inplace=True)
             st.dataframe(df_disp, use_container_width=True, hide_index=True)
@@ -207,7 +210,6 @@ with tab_reports:
         
         if not report_data.empty:
             report_data['date'] = pd.to_datetime(report_data['date'])
-            # Only count completed sales for reports
             report_data = report_data[report_data['status'] == 'Completed']
             now_date = datetime.now()
             
@@ -219,23 +221,29 @@ with tab_reports:
                 st.info("### 🟢 Last 7 Days (Collected)")
                 st.write(f"**Total Revenue:** ₹{last_7_days['total'].sum():,.2f}")
                 st.write(f"**Total Sessions:** {len(last_7_days)}")
+                # Quick metric to see hardware utilization
+                st.write(f"**Hardware Hours Booked:** {last_7_days['duration'].sum()} hrs")
             with r2:
                 st.info("### 🔵 Last 30 Days (Collected)")
                 st.write(f"**Total Revenue:** ₹{last_30_days['total'].sum():,.2f}")
                 st.write(f"**Total Sessions:** {len(last_30_days)}")
+                st.write(f"**Hardware Hours Booked:** {last_30_days['duration'].sum()} hrs")
                 
             st.divider()
             
             st.subheader("📥 Download Specific Date Data")
             selected_date = st.date_input("Select a Date to Export", value=now_date.date())
             
-            # Re-fetch data to include active sessions in the export if wanted, or just all data
             all_export = pd.DataFrame(response.data)
             all_export['date'] = pd.to_datetime(all_export['date'])
             export_data = all_export[all_export['date'].dt.date == selected_date]
             
+            # Keep order nice for Excel downloads
+            export_cols = ['id', 'date', 'entry_time', 'duration', 'customer', 'phone', 'instagram', 'system', 'total', 'method', 'status']
+            clean_export = export_data[[c for c in export_cols if c in export_data.columns]]
+            
             if not export_data.empty:
-                csv = export_data.to_csv(index=False).encode('utf-8')
+                csv = clean_export.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label=f"Download Data for {selected_date}",
                     data=csv, file_name=f"Gamerarena_Export_{selected_date}.csv", mime="text/csv",
