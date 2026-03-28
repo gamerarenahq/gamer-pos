@@ -17,6 +17,7 @@ st.markdown("""
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
     .active-card { background-color: #2b2b3d; padding: 20px; border-radius: 10px; border-left: 5px solid #00ff88; margin-bottom: 15px; }
     .vault-card { background-color: #1a1a2e; padding: 20px; border-radius: 10px; border: 1px solid #e94560; }
+    .metric-box { background-color: #2b2b3d; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #444; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -226,63 +227,32 @@ with tab_analytics:
             
             if not df.empty:
                 df['date'] = pd.to_datetime(df['date'])
-                # Only analyze completed, paid sessions
                 comp_df = df[df['status'] == 'Completed'].copy()
                 
-                # --- SECTION 1: WEEK OVER WEEK (WoW) GROWTH ---
-                st.markdown("### 📊 Week-over-Week Performance")
-                now = datetime.now()
+                # --- DATE LOGIC ---
+                today = datetime.now().date()
                 
-                # Filter for This Week (Last 7 Days) and Last Week (Days 8-14)
-                this_week = comp_df[comp_df['date'] >= (now - timedelta(days=7))]
-                last_week = comp_df[(comp_df['date'] >= (now - timedelta(days=14))) & (comp_df['date'] < (now - timedelta(days=7)))]
+                # Weekly Boundaries
+                start_of_this_week = today - timedelta(days=today.weekday()) # Monday
+                end_of_last_week = start_of_this_week - timedelta(days=1)    # Sunday
+                start_of_last_week = start_of_this_week - timedelta(days=7)  # Previous Monday
                 
-                # Calculate Totals
-                tw_rev = this_week['total'].sum()
-                lw_rev = last_week['total'].sum()
-                tw_sess = len(this_week)
-                lw_sess = len(last_week)
-                tw_hrs = this_week['duration'].sum()
-                lw_hrs = last_week['duration'].sum()
+                # Monthly Boundaries
+                start_of_this_month = today.replace(day=1)                   # 1st of current month
+                end_of_last_month = start_of_this_month - timedelta(days=1)  # Last day of previous month
+                start_of_last_month = end_of_last_month.replace(day=1)       # 1st of previous month
                 
-                w1, w2, w3 = st.columns(3)
-                # Streamlit metric automatically adds nice up/down arrows based on the delta
-                w1.metric("7-Day Revenue", f"₹{tw_rev:,.2f}", delta=f"₹{tw_rev - lw_rev:,.2f} vs last week")
-                w2.metric("7-Day Sessions", f"{tw_sess}", delta=f"{tw_sess - lw_sess} vs last week")
-                w3.metric("7-Day Hours Booked", f"{tw_hrs} hrs", delta=f"{tw_hrs - lw_hrs} hrs vs last week")
+                # Data Slicing
+                wtd_data = comp_df[comp_df['date'].dt.date >= start_of_this_week]
+                last_week_data = comp_df[(comp_df['date'].dt.date >= start_of_last_week) & (comp_df['date'].dt.date <= end_of_last_week)]
                 
-                st.divider()
+                mtd_data = comp_df[comp_df['date'].dt.date >= start_of_this_month]
+                last_month_data = comp_df[(comp_df['date'].dt.date >= start_of_last_month) & (comp_df['date'].dt.date <= end_of_last_month)]
                 
-                # --- SECTION 2: HARDWARE SHOWDOWN ---
-                st.markdown("### 🖥️ vs 🎮 Hardware Performance Showdown")
-                st.caption("Compare which machines are generating the most revenue and playtime all-time.")
+                # --- SECTION 1: CALENDAR PERFORMANCE ---
+                st.markdown("### 📅 Business Performance Tracker")
                 
-                if 'system' in comp_df.columns:
-                    # Group by the system name and sum the revenue and hours
-                    hw_stats = comp_df.groupby('system').agg(
-                        Total_Revenue=('total', 'sum'),
-                        Total_Hours=('duration', 'sum'),
-                        Total_Sessions=('id', 'count')
-                    ).reset_index()
-                    
-                    # Sort by Revenue so the highest earner is at the top
-                    hw_stats = hw_stats.sort_values(by='Total_Revenue', ascending=False)
-                    
-                    # Format the dataframe for display
-                    hw_display = hw_stats.copy()
-                    hw_display['Total_Revenue'] = hw_display['Total_Revenue'].apply(lambda x: f"₹{x:,.2f}")
-                    
-                    colA, colB = st.columns([1, 1.5])
-                    with colA:
-                        st.dataframe(hw_display, use_container_width=True, hide_index=True)
-                    with colB:
-                        # Create a quick visual bar chart of revenue by system
-                        st.bar_chart(hw_stats.set_index('system')['Total_Revenue'], color="#a777e3")
-            else:
-                st.info("Not enough data to run deep analytics yet.")
+                col1, col2 = st.columns(2)
                 
-        except Exception as e:
-            st.error(f"Error loading analytics: {e}")
-            
-    elif owner_pwd != "":
-        st.error("❌ Unauthorized. Incorrect Master Passcode.")
+                with col1:
+                    st.markdown(f"<div class='metric-box'><h4>Week-to-Date (WTD)</h4><h2>₹{wtd_data['total'].sum():,.2f}</h2><p>{len(wtd_data)} Sessions | {wtd_data['duration'].sum()} Hrs</p></div>", unsafe_allow_html=True
