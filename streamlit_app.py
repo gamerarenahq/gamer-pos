@@ -56,7 +56,6 @@ SYSTEMS = {
 def calculate_price(category, duration, extra_ctrl=0):
     full_hours = int(duration)
     is_half_hour = (duration % 1) != 0 
-    
     cost = (full_hours * PRICES_1HR[category])
     if is_half_hour: cost += PRICES_30MIN[category]
     if "PS5" in category: cost += (extra_ctrl * 100)
@@ -80,16 +79,13 @@ with tab_book:
         with col2:
             st.subheader("🕹️ Session Details")
             selected_systems = st.multiselect("Select Systems", list(SYSTEMS.keys()))
-            
             st.write("Time In:")
             now = datetime.now()
             t1, t2, t3 = st.columns(3)
             sel_h = t1.selectbox("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
             sel_m = t2.selectbox("Minute", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
             sel_a = t3.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1)
-            
             duration = st.number_input("Duration (Hours)", min_value=0.5, max_value=12.0, step=0.5, value=1.0)
-            
             has_ps5 = any("PS" in sys for sys in selected_systems)
             extra_ctrl = st.number_input("Extra Controllers (₹100 each)", 0, 3, 0) if has_ps5 else 0
             
@@ -103,10 +99,45 @@ with tab_book:
                         cat = SYSTEMS[sys]
                         total = calculate_price(cat, duration, extra_ctrl)
                         ftime = f"{sel_h}:{sel_m} {sel_a}"
-                        
                         conn.table("sales").insert({
                             "customer": cust_name, "phone": cust_phone, "instagram": cust_insta,
                             "system": sys, "duration": duration, "total": total, 
                             "method": "Pending", "entry_time": ftime, "status": "Active" 
                         }).execute()
-                st.success(f"✅ Session Started! Bill currently stands
+                st.success(f"✅ Session Started! Bill currently stands at ₹{total}.")
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+# --- TAB 2: ACTIVE SESSIONS ---
+with tab_active:
+    st.subheader("🕹️ Live Operations Control")
+    try:
+        resp = conn.table("sales").select("*").eq("status", "Active").execute()
+        active_df = pd.DataFrame(resp.data)
+        if not active_df.empty:
+            active_df['display_name'] = active_df['customer'] + " | " + active_df['system'] + " | Current Bill: ₹" + active_df['total'].astype(str)
+            selected_session = st.selectbox("Select Player to Manage:", active_df['display_name'].tolist())
+            target_row = active_df[active_df['display_name'] == selected_session].iloc[0]
+            session_id = int(target_row['id'])
+            current_total = float(target_row['total'])
+            current_duration = float(target_row.get('duration', 0.0))
+            sys_type = target_row['system']
+            st.markdown(f"<div class='active-card'><b>Player:</b> {target_row['customer']} <br><b>System:</b> {sys_type} <br><b>Time In:</b> {target_row.get('entry_time', 'N/A')} <br><b>Total Hours:</b> {current_duration} <br><b>Current Bill:</b> ₹{current_total}</div>", unsafe_allow_html=True)
+            action = st.radio("What would you like to do?", ["➕ Add Extra Time", "🛑 End Session & Collect Payment"])
+            if action == "➕ Add Extra Time":
+                extra_time = st.number_input("Additional Hours to Add", min_value=0.5, max_value=5.0, step=0.5, value=0.5)
+                category = SYSTEMS[sys_type]
+                extra_cost = calculate_price(category, extra_time, 0)
+                new_total = current_total + extra_cost
+                new_duration = current_duration + extra_time
+                st.info(f"Adding {extra_time} hours adds ₹{extra_cost}. New Total: ₹{new_total}")
+                if st.button("Update Session Bill", type="primary"):
+                    conn.table("sales").update({"total": new_total, "duration": new_duration}).eq("id", session_id).execute()
+                    st.success(f"✅ Updated! New Total is ₹{new_total}.")
+                    st.rerun()
+            elif action == "🛑 End Session & Collect Payment":
+                final_pay_mode = st.radio("How is the customer paying right now?", ["Cash", "Online / UPI"], horizontal=True)
+                if st.button(f"Collect ₹{current_total} & End Session", type="primary"):
+                    conn.table("sales").update({"status": "Completed", "method": final_pay_mode}).eq("id", session_id).execute()
+                    st.balloons()
+                    st.success("✅ Payment received
