@@ -9,7 +9,8 @@ st.title("🎮 Gamerarena Cloud POS")
 
 # Create connection to Google Sheets
 # Note: You will set the URL in the Streamlit Cloud "Secrets" later
-conn = st.connection("gsheets", type=GSheetsConnection)
+conn = [connections.gsheets]
+spreadsheet = "https://docs.google.com/spreadsheets/d/1yP9bwWNfpSLq4apjtF7qphnbgCzJdYjQOrSQnWRjVB0/"
 
 # Pricing Logic
 PRICES = {"PC Gaming": 99, "PS5 Gaming": 149, "Racing Sim": 249}
@@ -19,7 +20,7 @@ SYSTEMS = {"PS1": "PS5 Gaming", "PS2": "PS5 Gaming", "PS3": "PS5 Gaming", "PC1":
 with st.sidebar.form("entry_form"):
     cust_name = st.text_input("Customer Name")
     selected_sys = st.selectbox("System", list(SYSTEMS.keys()))
-    duration = st.selectbox("Duration (Hrs)", [0.5, 1, 2, 3])
+    duration = st.selectbox("Duration (Hrs)", [0.5, 1, 2, 3,4,5])
     extra_ctrl = st.number_input("Extra Controllers", 0, 3) if "PS" in selected_sys else 0
     pay_mode = st.radio("Payment", ["Cash", "Online"])
     submitted = st.form_submit_button("Log Sale")
