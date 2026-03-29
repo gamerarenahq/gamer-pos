@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CRM STYLE & CONFIG ---
 st.set_page_config(page_title="Gamerarena CRM (Staging)", page_icon="🎮", layout="wide")
-st_autorefresh(interval=60000, limit=None, key="crm_refresh") # 60-second heartbeat
+st_autorefresh(interval=60000, limit=None, key="crm_refresh")
 
 st.markdown("""
 <style>
@@ -23,8 +23,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AUTHENTICATION ---
+# --- 2. STATE MANAGEMENT (THE CART) ---
 if "auth" not in st.session_state: st.session_state.auth = False
+if "cart" not in st.session_state: st.session_state.cart = []
+
 if not st.session_state.auth:
     st.title("🔒 Staging CRM Login")
     if st.button("Login") if st.text_input("Passcode", type="password") == "Admin@2026" else False:
@@ -47,7 +49,7 @@ def get_price(cat, dur, extra=0):
     return cost
 
 # --- 4. TABS ---
-t1, t2, t3, t4, t5 = st.tabs(["🕹️ Active Floor", "📝 Bookings & Entry", "📊 Daily Summary", "📅 Reports", "🧠 Vault"])
+t1, t2, t3, t4, t5 = st.tabs(["🕹️ Active Floor", "🛒 Group Booking", "📊 Daily Summary", "📅 Reports", "🧠 Vault"])
 
 # --- TAB 1: ACTIVE FLOOR & ARRIVALS ---
 with t1:
@@ -61,19 +63,15 @@ with t1:
             if not active_df.empty:
                 now_ist = datetime.now(IST)
                 for _, row in active_df.iterrows():
-                    db_date = pd.to_datetime(row['date']).tz_convert(IST).strftime('%Y-%m-%d')
+                    # Bulletproof Date Parsing
                     try:
-                        entry_dt = IST.localize(datetime.strptime(f"{db_date} {row['entry_time']}", '%Y-%m-%d %I:%M %p'))
+                        entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
                         time_left = ((entry_dt + timedelta(hours=row['duration'])) - now_ist).total_seconds() / 60.0
                     except: time_left = 999 
 
-                    if time_left < 0:
-                        cc, txt = "overdue-card", f"🚨 OVERDUE ({abs(int(time_left))}m)"
-                    elif time_left <= 5:
-                        cc, txt = "warning-card", f"⚠️ {int(time_left)}m REMAINING"
-                        st.toast(f"Time up soon for {row['customer']}!", icon="⚠️")
-                    else:
-                        cc, txt = "crm-card", f"⏳ {int(time_left)}m remaining"
+                    if time_left < 0: cc, txt = "overdue-card", f"🚨 OVERDUE ({abs(int(time_left))}m)"
+                    elif time_left <= 5: cc, txt = "warning-card", f"⚠️ {int(time_left)}m REMAINING"
+                    else: cc, txt = "crm-card", f"⏳ {int(time_left)}m remaining"
 
                     st.markdown(f"<div class='{cc}'><h4 style='margin:0;color:#E0E7FF;'>{row['system']} | {row['customer']}</h4><p style='margin:5px 0 0 0;color:#9CA3AF;'>In: {row['entry_time']} | {row['duration']} Hrs | ₹{row['total']}<br><b style='color:#FCD34D;'>{txt}</b></p></div>", unsafe_allow_html=True)
                 
@@ -97,7 +95,7 @@ with t1:
         except: st.write("Loading floor...")
 
     with col_queue:
-        st.subheader("📥 Today's Reservations")
+        st.subheader("📥 Expected Today")
         try:
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             q_res = conn.table("sales_staging").select("*").eq("status", "Booked").eq("scheduled_date", today_str).execute()
@@ -105,24 +103,22 @@ with t1:
             if not q_df.empty:
                 for _, q in q_df.iterrows():
                     st.markdown(f"<div style='background:#2B2B40; padding:15px; border-radius:8px; margin-bottom:10px;'><b>{q['entry_time']}</b><br>{q['customer']} ({q['system']})<br>{q['duration']} Hrs</div>", unsafe_allow_html=True)
-                    if st.button(f"Check-In {q['customer']}", key=f"chk_{q['id']}"):
+                    if st.button(f"Check-In {q['system']}", key=f"chk_{q['id']}"):
                         now_time = datetime.now(IST).strftime("%I:%M %p")
                         conn.table("sales_staging").update({"status": "Active", "entry_time": now_time}).eq("id", q['id']).execute()
                         st.success("Checked In!"); st.rerun()
-            else: st.info("No bookings for today.")
+            else: st.info("No bookings pending.")
         except: st.write("Loading queue...")
 
-# --- TAB 2: BOOKINGS & ENTRY ---
+# --- TAB 2: CART & BOOKING ---
 with t2:
-    st.subheader("📅 7-Day Booking Pipeline")
+    st.subheader("📅 Pipeline Overview")
     try:
         b_res = conn.table("sales_staging").select("scheduled_date").eq("status", "Booked").execute()
         b_df = pd.DataFrame(b_res.data)
-        
-        today_date = datetime.now(IST).date()
         cal_cols = st.columns(7)
         for i in range(7):
-            target_date = today_date + timedelta(days=i)
+            target_date = datetime.now(IST).date() + timedelta(days=i)
             count = len(b_df[b_df['scheduled_date'] == target_date.strftime('%Y-%m-%d')]) if not b_df.empty else 0
             day_name = "Today" if i == 0 else target_date.strftime('%a %d')
             color = "#10B981" if count > 0 else "#4B5563"
@@ -131,49 +127,74 @@ with t2:
     
     st.divider()
     
-    with st.container(border=True):
-        entry_type = st.radio("Entry Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking (Schedule)"], horizontal=True)
-        st.write("")
+    col_form, col_cart = st.columns([1.5, 1], gap="large")
+    
+    with col_form:
+        st.subheader("1. Add Items to Group Cart")
+        sel_sys = st.selectbox("Hardware", list(SYSTEMS.keys()))
+        dur = st.number_input("Duration (Hours)", 0.5, 12.0, 1.0, 0.5)
+        ctrl = st.number_input("Extra Controllers", 0, 3, 0) if "PS" in sel_sys else 0
         
+        if st.button("➕ Add to Cart"):
+            st.session_state.cart.append({
+                "system": sel_sys, "duration": dur, "ctrl": ctrl, 
+                "price": get_price(SYSTEMS[sel_sys], dur, ctrl)
+            })
+            st.rerun()
+
+    with col_cart:
+        st.subheader("🛒 Current Cart")
+        if st.session_state.cart:
+            cart_df = pd.DataFrame(st.session_state.cart)
+            st.dataframe(cart_df[['system', 'duration', 'price']], hide_index=True, use_container_width=True)
+            st.markdown(f"**Total Cart Value: ₹{cart_df['price'].sum()}**")
+            if st.button("🗑️ Clear Cart"):
+                st.session_state.cart = []
+                st.rerun()
+        else:
+            st.info("Cart is empty.")
+
+    st.write("---")
+    st.subheader("2. Finalize & Deploy")
+    with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
-            name = st.text_input("Gamer Name")
+            name = st.text_input("Group / Lead Name")
             phone = st.text_input("Phone (Optional)")
+            entry_type = st.radio("Entry Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True)
         with c2:
-            sys_list = st.multiselect("Assign Hardware", list(SYSTEMS.keys()))
-            dur = st.number_input("Duration (Hours)", 0.5, 12.0, 1.0, 0.5)
-            ctrl = st.number_input("Extra Controllers", 0, 3, 0) if any("PS" in s for s in sys_list) else 0
+            h, m, ap = st.columns(3)
+            now = datetime.now(IST)
+            if "Walk-in" in entry_type:
+                sch_date = now.strftime('%Y-%m-%d')
+                sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
+                sm = m.selectbox("MM", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
+                sa = ap.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p")=="AM" else 1)
+                final_status = "Active"
+                btn_txt = "🚀 Deploy Entire Cart Now"
+            else:
+                # INFINITE CALENDAR
+                sch_date_obj = st.date_input("Select Future Date", now.date(), min_value=now.date())
+                sch_date = sch_date_obj.strftime('%Y-%m-%d')
+                sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)])
+                sm = m.selectbox("MM", [f"{i:02d}" for i in range(60)])
+                sa = ap.selectbox("AM/PM", ["AM", "PM"])
+                final_status = "Booked"
+                btn_txt = "📅 Confirm Group Booking"
 
-        st.write("---")
-        h, m, ap = st.columns(3)
-        now = datetime.now(IST)
-        
-        if "Walk-in" in entry_type:
-            sch_date = now.strftime('%Y-%m-%d')
-            sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
-            sm = m.selectbox("MM", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
-            sa = ap.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p")=="AM" else 1)
-            final_status = "Active"
-            btn_txt = "🚀 Start Session Now"
+    if st.button(btn_txt, type="primary"):
+        if not name: st.error("Please provide a Group Name.")
+        elif not st.session_state.cart: st.error("Cart is empty. Add hardware first.")
         else:
-            sch_date_obj = st.date_input("Select Booking Date", now.date(), min_value=now.date(), max_value=now.date() + timedelta(days=7))
-            sch_date = sch_date_obj.strftime('%Y-%m-%d')
-            sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)])
-            sm = m.selectbox("MM", [f"{i:02d}" for i in range(60)])
-            sa = ap.selectbox("AM/PM", ["AM", "PM"])
-            final_status = "Booked"
-            btn_txt = "📅 Confirm Reservation"
-
-    if st.button(btn_txt):
-        if name and sys_list:
             try:
-                for s in sys_list:
+                for item in st.session_state.cart:
                     conn.table("sales_staging").insert({
-                        "customer": name, "phone": phone, "system": s, "duration": dur, 
-                        "total": get_price(SYSTEMS[s], dur, ctrl), "method": "Pending", 
+                        "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
+                        "total": item['price'], "method": "Pending", 
                         "entry_time": f"{sh}:{sm} {sa}", "status": final_status, "scheduled_date": sch_date
                     }).execute()
-                st.success(f"{'Session Started' if final_status == 'Active' else 'Booking Saved'}!")
+                st.session_state.cart = [] # Clear cart after success
+                st.success(f"Group Order Processed successfully!")
                 st.rerun()
             except Exception as e: st.error(f"Error: {e}")
 
@@ -184,16 +205,20 @@ with t3:
         raw = conn.table("sales_staging").select("*").execute()
         df = pd.DataFrame(raw.data)
         if not df.empty:
-            df['date_dt'] = pd.to_datetime(df['date'], utc=True).dt.tz_convert('Asia/Kolkata')
-            t_df = df[df['date_dt'].dt.date == datetime.now(IST).date()]
+            # Bulletproof String Date Matching
+            df['date_str'] = df['date'].str[:10] 
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            t_df = df[df['date_str'] == today_str]
+            
             comp = t_df[t_df['status'] == 'Completed']
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Cash Collected", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
             m2.metric("UPI Collected", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
             m3.metric("Total Revenue", f"₹{comp['total'].sum():,.0f}")
             m4.metric("Pending on Floor", f"₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}")
-            st.dataframe(t_df.sort_values('date_dt', ascending=False), use_container_width=True, hide_index=True)
-    except: st.error("Awaiting data.")
+            st.dataframe(t_df.sort_values('date', ascending=False), use_container_width=True, hide_index=True)
+        else: st.info("No data in staging yet.")
+    except Exception as e: st.error(f"Error loading summary: {e}")
 
 # --- TAB 4: REPORTS ---
 with t4:
@@ -201,12 +226,12 @@ with t4:
     d_range = st.date_input("Date Range", [datetime.now(IST).date(), datetime.now(IST).date()])
     try:
         if len(d_range) == 2:
-            s_dt, e_dt = d_range
+            s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
             raw_e = conn.table("sales_staging").select("*").execute()
             edf = pd.DataFrame(raw_e.data)
             if not edf.empty:
-                edf['d_str'] = pd.to_datetime(edf['date']).dt.tz_convert('Asia/Kolkata').dt.date
-                f_edf = edf[(edf['d_str'] >= s_dt) & (edf['d_str'] <= e_dt)]
+                edf['date_str'] = edf['date'].str[:10]
+                f_edf = edf[(edf['date_str'] >= s_dt) & (edf['date_str'] <= e_dt)]
                 if not f_edf.empty:
                     st.download_button("📥 Export Range", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv")
                     st.dataframe(f_edf, hide_index=True)
@@ -221,17 +246,20 @@ with t5:
             raw_v = conn.table("sales_staging").select("*").execute()
             vdf = pd.DataFrame(raw_v.data)
             if not vdf.empty:
-                vdf['dt'] = pd.to_datetime(vdf['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+                vdf['date_str'] = vdf['date'].str[:10]
                 pdf = vdf[vdf['status'] == 'Completed'].copy()
-                now = datetime.now(IST).replace(tzinfo=None)
-                s_tw, s_tm = (now - timedelta(days=now.weekday())).date(), now.date().replace(day=1)
+                
+                now = datetime.now(IST)
+                s_tw = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')
+                s_tm = now.replace(day=1).strftime('%Y-%m-%d')
                 
                 c1, c2 = st.columns(2)
-                c1.markdown(f"<div class='metric-box'><h4>WTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['dt'].dt.date >= s_tw]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                c2.markdown(f"<div class='metric-box'><h4>MTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['dt'].dt.date >= s_tm]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c1.markdown(f"<div class='metric-box'><h4>WTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tw]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><h4>MTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tm]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
                 
                 st.divider()
                 h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
                 pdf['Hardware'] = pdf['system'].map(h_map).fillna(pdf['system'])
                 st.bar_chart(pdf.groupby('Hardware')['total'].sum(), color="#4F46E5")
-        except: st.error("Vault processing error.")
+            else: st.warning("No completed data found.")
+        except Exception as e: st.error(f"Vault processing error: {e}")
