@@ -23,19 +23,28 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. STATE MANAGEMENT (THE CART) ---
-if "auth" not in st.session_state: st.session_state.auth = False
-if "cart" not in st.session_state: st.session_state.cart = []
+# --- 2. STATE MANAGEMENT & AUTH ---
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+if "cart" not in st.session_state:
+    st.session_state.cart = []
 
 if not st.session_state.auth:
     st.title("🔒 Staging CRM Login")
-    if st.button("Login") if st.text_input("Passcode", type="password") == "Admin@2026" else False:
-        st.session_state.auth = True; st.rerun()
+    pwd = st.text_input("Enter Staff Passcode", type="password")
+    if st.button("Login"):
+        if pwd == "Admin@2026":
+            st.session_state.auth = True
+            st.rerun()
+        else:
+            st.error("❌ Invalid Passcode")
     st.stop()
 
 # --- 3. DATABASE ---
-try: conn = st.connection("supabase", type=SupabaseConnection)
-except: st.error("DB Error."); st.stop()
+try: 
+    conn = st.connection("supabase", type=SupabaseConnection)
+except: 
+    st.error("Database Connection Error."); st.stop()
 
 IST = pytz.timezone('Asia/Kolkata')
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
@@ -63,7 +72,6 @@ with t1:
             if not active_df.empty:
                 now_ist = datetime.now(IST)
                 for _, row in active_df.iterrows():
-                    # Bulletproof Date Parsing
                     try:
                         entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
                         time_left = ((entry_dt + timedelta(hours=row['duration'])) - now_ist).total_seconds() / 60.0
@@ -173,7 +181,6 @@ with t2:
                 final_status = "Active"
                 btn_txt = "🚀 Deploy Entire Cart Now"
             else:
-                # INFINITE CALENDAR
                 sch_date_obj = st.date_input("Select Future Date", now.date(), min_value=now.date())
                 sch_date = sch_date_obj.strftime('%Y-%m-%d')
                 sh = h.selectbox("HH", [f"{i:02d}" for i in range(1, 13)])
@@ -193,8 +200,8 @@ with t2:
                         "total": item['price'], "method": "Pending", 
                         "entry_time": f"{sh}:{sm} {sa}", "status": final_status, "scheduled_date": sch_date
                     }).execute()
-                st.session_state.cart = [] # Clear cart after success
-                st.success(f"Group Order Processed successfully!")
+                st.session_state.cart = []
+                st.success("Order Processed successfully!")
                 st.rerun()
             except Exception as e: st.error(f"Error: {e}")
 
@@ -205,7 +212,6 @@ with t3:
         raw = conn.table("sales_staging").select("*").execute()
         df = pd.DataFrame(raw.data)
         if not df.empty:
-            # Bulletproof String Date Matching
             df['date_str'] = df['date'].str[:10] 
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             t_df = df[df['date_str'] == today_str]
