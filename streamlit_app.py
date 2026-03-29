@@ -52,7 +52,6 @@ except: st.error("Database Connection Error."); st.stop()
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 
 def get_price(cat, dur, extra=0):
-    # FIXED PRICING ENGINE based on accurate pro-rated controllers
     if cat == "PS5":
         rate_1h = 150 + (extra * 100)
         rate_30m = 100 + (extra * 100)
@@ -100,14 +99,34 @@ with t1:
                 
                 ca, cb = st.columns(2)
                 with ca:
-                    ext = st.number_input("Add Hrs", 0.5, 5.0, 0.5)
-                    if st.button("➕ Extend"):
+                    st.markdown("**⏳ Add More Time**")
+                    ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5)
+                    if st.button("➕ Extend Session", use_container_width=True):
                         conn.table("sales").update({"total": row['total'] + get_price(SYSTEMS[row['system']], ext, 0), "duration": row['duration'] + ext}).eq("id", row['id']).execute()
                         st.rerun()
                 with cb:
-                    pay = st.radio("Pay", ["Cash", "UPI"], horizontal=True, label_visibility="collapsed")
-                    if st.button("🛑 Collect & Close"):
-                        conn.table("sales").update({"status": "Completed", "method": pay}).eq("id", row['id']).execute()
+                    st.markdown("**💳 Smart Checkout**")
+                    try:
+                        entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
+                        played_mins = int((datetime.now(IST) - entry_dt).total_seconds() / 60.0)
+                    except: played_mins = 0
+                    
+                    st.caption(f"⏱️ Actual Time Played: **{played_mins} mins**")
+                    
+                    # 40-Minute Rule Logic
+                    rec_dur = float(row['duration'])
+                    if played_mins <= 40 and row['duration'] >= 1.0: 
+                        rec_dur = 0.5
+                    elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: 
+                        rec_dur = 1.0
+                    
+                    chk_1, chk_2 = st.columns(2)
+                    f_dur = chk_1.number_input("Billed Hrs", 0.5, 12.0, rec_dur, 0.5)
+                    f_total = chk_2.number_input("Final Bill (₹)", 0, 10000, int(row['total']), 10)
+                    
+                    pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, label_visibility="collapsed")
+                    if st.button("🛑 Confirm & Close", type="primary", use_container_width=True):
+                        conn.table("sales").update({"status": "Completed", "method": pay, "duration": f_dur, "total": f_total}).eq("id", row['id']).execute()
                         st.balloons(); st.rerun()
             else: st.info("Floor is clear.")
         except: st.write("Loading floor...")
@@ -243,7 +262,6 @@ with t2:
                 display_df.rename(columns={"scheduled_date": "Date", "entry_time": "Time", "customer": "Name", "system": "System", "duration": "Hrs"}, inplace=True)
                 st.dataframe(display_df[['Date', 'Time', 'Name', 'System', 'Hrs']], hide_index=True, use_container_width=True)
                 
-                # --- NEW: EDIT / DELETE BOOKING ---
                 st.write("---")
                 st.write("✏️ **Edit or Cancel a Booking**")
                 up_df['lbl'] = up_df['scheduled_date'] + " " + up_df['entry_time'] + " | " + up_df['customer'] + " (" + up_df['system'] + ")"
