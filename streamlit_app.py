@@ -30,6 +30,8 @@ now_ist = datetime.now(IST)
 if "auth" not in st.session_state: st.session_state.auth = False
 if "cart" not in st.session_state: st.session_state.cart = []
 
+if "f_name" not in st.session_state: st.session_state.f_name = ""
+if "f_phone" not in st.session_state: st.session_state.f_phone = ""
 if "b_type" not in st.session_state: st.session_state.b_type = "🏃‍♂️ Walk-in (Play Now)"
 if "b_date" not in st.session_state: st.session_state.b_date = now_ist.date()
 if "b_time" not in st.session_state: st.session_state.b_time = now_ist.time()
@@ -43,19 +45,29 @@ if not st.session_state.auth:
         else: st.error("❌ Invalid Passcode")
     st.stop()
 
-# --- 3. DATABASE ---
+# --- 3. DATABASE & PRICING ---
 try: conn = st.connection("supabase", type=SupabaseConnection)
 except: st.error("Database Connection Error."); st.stop()
 
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
-PRICES_1H = {"PC": 100, "PS5": 150, "Racing Sim": 250}
-PRICES_30M = {"PC": 70, "PS5": 100, "Racing Sim": 150}
 
 def get_price(cat, dur, extra=0):
-    cost = int(dur) * PRICES_1H.get(cat, 0)
-    if (dur % 1) != 0: cost += PRICES_30M.get(cat, 0)
-    if "PS5" in cat: cost += (extra * 100)
-    return cost
+    # FIXED PRICING ENGINE based on accurate pro-rated controllers
+    if cat == "PS5":
+        rate_1h = 150 + (extra * 100)
+        rate_30m = 100 + (extra * 100)
+    elif cat == "PC":
+        rate_1h = 100
+        rate_30m = 70
+    elif cat == "Racing Sim":
+        rate_1h = 250
+        rate_30m = 150
+    else:
+        rate_1h = 0; rate_30m = 0
+        
+    full_hrs = int(dur)
+    half_hr = 1 if (dur % 1) != 0 else 0
+    return (full_hrs * rate_1h) + (half_hr * rate_30m)
 
 # --- 4. TABS ---
 t1, t2, t3, t4, t5 = st.tabs(["🕹️ Active Floor", "📝 Bookings & Cart", "📊 Daily Summary", "📅 Reports", "🧠 Vault"])
@@ -123,8 +135,8 @@ with t2:
     with col_form:
         st.subheader("1. Lead & Booking Details")
         with st.container(border=True):
-            name = st.text_input("Gamer / Group Name")
-            phone = st.text_input("Phone Number (Optional)")
+            name = st.text_input("Gamer / Group Name", key="f_name")
+            phone = st.text_input("Phone Number (Optional)", key="f_phone")
             st.write("---")
             
             st.session_state.b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, index=0 if "Walk-in" in st.session_state.b_type else 1)
@@ -174,7 +186,7 @@ with t2:
                 st.markdown(f"### Total: ₹{total_val}")
                 
                 if st.button(btn_txt, type="primary", use_container_width=True):
-                    if not name: 
+                    if not st.session_state.f_name: 
                         st.error("Please provide a Name first.")
                     else:
                         try:
@@ -199,36 +211,74 @@ with t2:
                                                 break
                                     if conflict: break
 
-                            if conflict:
-                                st.error(conflict_msg)
+                            if conflict: st.error(conflict_msg)
                             else:
                                 for item in st.session_state.cart:
                                     conn.table("sales").insert({
-                                        "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
+                                        "customer": st.session_state.f_name, "phone": st.session_state.f_phone, "system": item['system'], "duration": item['duration'], 
                                         "total": item['price'], "method": "Pending", 
                                         "entry_time": time_str, "status": final_status, "scheduled_date": sch_date
                                     }).execute()
+                                
                                 st.session_state.cart = []
+                                st.session_state.f_name = ""
+                                st.session_state.f_phone = ""
+                                st.session_state.b_type = "🏃‍♂️ Walk-in (Play Now)"
+                                st.session_state.b_date = datetime.now(IST).date()
+                                st.session_state.b_time = datetime.now(IST).time()
                                 st.success("Processed successfully!")
                                 st.rerun()
                         except Exception as e: st.error(f"Error: {e}")
-            else:
-                st.info("Cart is empty.")
+            else: st.info("Cart is empty.")
         
         st.subheader(f"📅 All Upcoming Bookings")
         try:
             today_str_cal = datetime.now(IST).strftime('%Y-%m-%d')
-            up_res = conn.table("sales").select("scheduled_date, entry_time, customer, system, duration").eq("status", "Booked").gte("scheduled_date", today_str_cal).execute()
+            up_res = conn.table("sales").select("id, scheduled_date, entry_time, customer, system, duration").eq("status", "Booked").gte("scheduled_date", today_str_cal).execute()
             up_df = pd.DataFrame(up_res.data)
             
             if not up_df.empty:
-                up_df = up_df.sort_values(by=["scheduled_date", "entry_time"])
-                up_df.rename(columns={"scheduled_date": "Date", "entry_time": "Time", "customer": "Name", "system": "System", "duration": "Hrs"}, inplace=True)
-                st.dataframe(up_df, hide_index=True, use_container_width=True)
-            else:
-                st.caption("No upcoming bookings found. The calendar is wide open!")
-        except Exception as e: 
-            st.caption(f"Loading schedule... {e}")
+                display_df = up_df.copy()
+                display_df = display_df.sort_values(by=["scheduled_date", "entry_time"])
+                display_df.rename(columns={"scheduled_date": "Date", "entry_time": "Time", "customer": "Name", "system": "System", "duration": "Hrs"}, inplace=True)
+                st.dataframe(display_df[['Date', 'Time', 'Name', 'System', 'Hrs']], hide_index=True, use_container_width=True)
+                
+                # --- NEW: EDIT / DELETE BOOKING ---
+                st.write("---")
+                st.write("✏️ **Edit or Cancel a Booking**")
+                up_df['lbl'] = up_df['scheduled_date'] + " " + up_df['entry_time'] + " | " + up_df['customer'] + " (" + up_df['system'] + ")"
+                sel_edit = st.selectbox("Select Booking", up_df['lbl'].tolist(), label_visibility="collapsed")
+                e_row = up_df[up_df['lbl'] == sel_edit].iloc[0]
+                
+                with st.container(border=True):
+                    e_c1, e_c2, e_c3 = st.columns(3)
+                    new_date = e_c1.date_input("New Date", datetime.strptime(e_row['scheduled_date'], '%Y-%m-%d').date(), key="e_date")
+                    
+                    try: e_time_obj = datetime.strptime(e_row['entry_time'], "%I:%M %p").time()
+                    except: e_time_obj = datetime.now(IST).time()
+                    new_time = e_c2.time_input("New Time", value=e_time_obj, step=60, key="e_time")
+                    
+                    sys_idx = list(SYSTEMS.keys()).index(e_row['system']) if e_row['system'] in SYSTEMS else 0
+                    new_sys = e_c3.selectbox("System", list(SYSTEMS.keys()), index=sys_idx, key="e_sys")
+                    
+                    new_dur = e_c1.number_input("Hrs", 0.5, 12.0, float(e_row['duration']), 0.5, key="e_dur")
+                    new_name = e_c2.text_input("Name", e_row['customer'], key="e_name")
+                    new_ctrl = e_c3.number_input("Extra Ctrl", 0, 3, 0, key="e_ctrl") if "PS" in new_sys else 0
+                    
+                    e_btn1, e_btn2 = st.columns(2)
+                    if e_btn1.button("💾 Save", use_container_width=True):
+                        conn.table("sales").update({
+                            "scheduled_date": new_date.strftime('%Y-%m-%d'), "entry_time": new_time.strftime("%I:%M %p"),
+                            "system": new_sys, "duration": new_dur, "customer": new_name,
+                            "total": get_price(SYSTEMS[new_sys], new_dur, new_ctrl)
+                        }).eq("id", int(e_row['id'])).execute()
+                        st.success("Updated!"); st.rerun()
+                    if e_btn2.button("🗑️ Delete", type="primary", use_container_width=True):
+                        conn.table("sales").delete().eq("id", int(e_row['id'])).execute()
+                        st.warning("Deleted!"); st.rerun()
+
+            else: st.caption("No upcoming bookings found.")
+        except Exception as e: st.caption(f"Loading schedule... {e}")
 
 # --- TAB 3: DAILY SUMMARY ---
 with t3:
