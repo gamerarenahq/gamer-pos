@@ -124,4 +124,169 @@ with t2:
     with col_form:
         st.subheader("1. Lead & Booking Details")
         with st.container(border=True):
-            name = st
+            name = st.text_input("Gamer / Group Name")
+            phone = st.text_input("Phone Number (Optional)")
+            st.write("---")
+            
+            # Bound to session state so it doesn't reset
+            st.session_state.b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, index=0 if "Walk-in" in st.session_state.b_type else 1)
+            
+            if "Walk-in" in st.session_state.b_type:
+                sch_date = datetime.now(IST).strftime('%Y-%m-%d')
+                # Native time picker with 60-second steps (1 minute increments)
+                st.session_state.b_time = st.time_input("Entry Time (HH:MM)", value=st.session_state.b_time, step=60)
+                time_str = st.session_state.b_time.strftime("%I:%M %p")
+                final_status = "Active"
+                btn_txt = "🚀 Start Session Now"
+            else:
+                st.session_state.b_date = st.date_input("Select Future Date", value=st.session_state.b_date, min_value=datetime.now(IST).date())
+                sch_date = st.session_state.b_date.strftime('%Y-%m-%d')
+                st.session_state.b_time = st.time_input("Booking Time (HH:MM)", value=st.session_state.b_time, step=60)
+                time_str = st.session_state.b_time.strftime("%I:%M %p")
+                final_status = "Booked"
+                btn_txt = f"📅 Confirm Reservation for {sch_date}"
+
+        st.subheader("2. Add Hardware to Cart")
+        with st.container(border=True):
+            sys_col, dur_col, ctrl_col = st.columns([2, 1, 1])
+            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()))
+            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5)
+            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0) if "PS" in sel_sys else 0
+            
+            if st.button("➕ Add to Group Cart", use_container_width=True):
+                st.session_state.cart.append({
+                    "system": sel_sys, "duration": dur, "ctrl": ctrl, 
+                    "price": get_price(SYSTEMS[sel_sys], dur, ctrl)
+                })
+                st.rerun()
+
+    with col_cart:
+        st.subheader("🛒 Current Cart")
+        with st.container(border=True):
+            if st.session_state.cart:
+                for i, item in enumerate(st.session_state.cart):
+                    c_info, c_price, c_del = st.columns([3, 1.5, 1])
+                    c_info.write(f"🎮 **{item['system']}** ({item['duration']}h)")
+                    c_price.write(f"₹{item['price']}")
+                    if c_del.button("❌", key=f"del_{i}"):
+                        st.session_state.cart.pop(i)
+                        st.rerun()
+                
+                st.divider()
+                total_val = sum(item['price'] for item in st.session_state.cart)
+                st.markdown(f"### Total: ₹{total_val}")
+                
+                if st.button(btn_txt, type="primary", use_container_width=True):
+                    if not name: 
+                        st.error("Please provide a Name first.")
+                    else:
+                        try:
+                            # DOUBLE BOOKING CHECKER
+                            conflict = False
+                            conflict_msg = ""
+                            res = conn.table("sales_staging").select("system, entry_time, duration").eq("scheduled_date", sch_date).in_("status", ["Active", "Booked"]).execute()
+                            db_df = pd.DataFrame(res.data)
+
+                            if not db_df.empty:
+                                for item in st.session_state.cart:
+                                    sys_df = db_df[db_df['system'] == item['system']]
+                                    if not sys_df.empty:
+                                        # Calculate exact overlap
+                                        new_start = datetime.strptime(f"{sch_date} {time_str}", "%Y-%m-%d %I:%M %p")
+                                        new_end = new_start + timedelta(hours=item['duration'])
+                                        for _, row in sys_df.iterrows():
+                                            db_start = datetime.strptime(f"{sch_date} {row['entry_time']}", "%Y-%m-%d %I:%M %p")
+                                            db_end = db_start + timedelta(hours=row['duration'])
+                                            
+                                            # If the new time starts before the old one ends AND ends after the old one starts = CONFLICT
+                                            if new_start < db_end and new_end > db_start:
+                                                conflict = True
+                                                conflict_msg = f"⚠️ Double Booking! {item['system']} is already reserved from {row['entry_time']} for {row['duration']}h."
+                                                break
+                                    if conflict: break
+
+                            if conflict:
+                                st.error(conflict_msg)
+                            else:
+                                # Safe to insert!
+                                for item in st.session_state.cart:
+                                    conn.table("sales_staging").insert({
+                                        "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
+                                        "total": item['price'], "method": "Pending", 
+                                        "entry_time": time_str, "status": final_status, "scheduled_date": sch_date
+                                    }).execute()
+                                st.session_state.cart = []
+                                st.success("Processed successfully!")
+                                st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
+            else:
+                st.info("Cart is empty.")
+        
+        st.subheader(f"📅 Daily Schedule View")
+        try:
+            day_res = conn.table("sales_staging").select("customer, system, entry_time, duration").eq("status", "Booked").eq("scheduled_date", sch_date).execute()
+            day_df = pd.DataFrame(day_res.data)
+            if not day_df.empty:
+                st.dataframe(day_df.sort_values(by="entry_time"), hide_index=True, use_container_width=True)
+            else:
+                st.caption(f"No advance bookings exist for {sch_date} yet.")
+        except: st.caption("Select a date to see schedule.")
+
+# --- TAB 3: DAILY SUMMARY ---
+with t3:
+    st.subheader("📊 Today's Snapshot")
+    try:
+        raw = conn.table("sales_staging").select("*").execute()
+        df = pd.DataFrame(raw.data)
+        if not df.empty:
+            df['date_str'] = df['date'].str[:10] 
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            t_df = df[df['date_str'] == today_str]
+            comp = t_df[t_df['status'] == 'Completed']
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Cash Collected", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
+            m2.metric("UPI Collected", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
+            m3.metric("Total Revenue", f"₹{comp['total'].sum():,.0f}")
+            m4.metric("Pending on Floor", f"₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}")
+            st.dataframe(t_df.sort_values('date', ascending=False), use_container_width=True, hide_index=True)
+    except: st.error("Error loading summary.")
+
+# --- TAB 4: REPORTS ---
+with t4:
+    st.subheader("📅 Deep Filter Reports")
+    d_range = st.date_input("Date Range", [datetime.now(IST).date(), datetime.now(IST).date()])
+    try:
+        if len(d_range) == 2:
+            s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
+            raw_e = conn.table("sales_staging").select("*").execute()
+            edf = pd.DataFrame(raw_e.data)
+            if not edf.empty:
+                edf['date_str'] = edf['date'].str[:10]
+                f_edf = edf[(edf['date_str'] >= s_dt) & (edf['date_str'] <= e_dt)]
+                if not f_edf.empty:
+                    st.download_button("📥 Export Range", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv")
+                    st.dataframe(f_edf, hide_index=True)
+                else: st.warning("No records.")
+    except: st.info("Select valid dates.")
+
+# --- TAB 5: VAULT ---
+with t5:
+    st.subheader("🔐 Intelligence Vault")
+    if st.text_input("Master Key", type="password") == "Shreenad@0511":
+        try:
+            raw_v = conn.table("sales_staging").select("*").execute()
+            vdf = pd.DataFrame(raw_v.data)
+            if not vdf.empty:
+                vdf['date_str'] = vdf['date'].str[:10]
+                pdf = vdf[vdf['status'] == 'Completed'].copy()
+                now = datetime.now(IST)
+                s_tw = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')
+                s_tm = now.replace(day=1).strftime('%Y-%m-%d')
+                c1, c2 = st.columns(2)
+                c1.markdown(f"<div class='metric-box'><h4>WTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tw]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><h4>MTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tm]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                st.divider()
+                h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
+                pdf['Hardware'] = pdf['system'].map(h_map).fillna(pdf['system'])
+                st.bar_chart(pdf.groupby('Hardware')['total'].sum(), color="#4F46E5")
+        except: st.error("Vault processing error.")
