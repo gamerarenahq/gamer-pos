@@ -2,7 +2,6 @@ import streamlit as st
 from st_supabase_connection import SupabaseConnection
 import pandas as pd
 from datetime import datetime, timedelta
-import pytz
 
 # --- PAGE CONFIG & STYLING ---
 st.set_page_config(page_title="Gamerarena OS", page_icon="🎮", layout="wide")
@@ -22,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- SECURE LOGIN ---
+# --- SECURE LOGIN (STAFF LEVEL) ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -45,9 +44,6 @@ if not check_password():
 st.title("🎮 Gamerarena Central OS")
 st.caption("Palghar's Premier Gaming Destination | Admin Mode")
 conn = st.connection("supabase", type=SupabaseConnection)
-
-# Timezone for Palghar
-IST = pytz.timezone('Asia/Kolkata')
 
 # --- PRICING & HARDWARE ---
 PRICES_1HR = {"PC Gaming": 100, "PS5 Gaming": 150, "Racing Sim": 250}
@@ -83,7 +79,7 @@ with tab_book:
             st.subheader("🕹️ Session Details")
             selected_systems = st.multiselect("Select Systems", list(SYSTEMS.keys()))
             st.write("Time In:")
-            now = datetime.now(IST)
+            now = datetime.now()
             t1, t2, t3 = st.columns(3)
             sel_h = t1.selectbox("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1)
             sel_m = t2.selectbox("Minute", [f"{i:02d}" for i in range(60)], index=int(now.strftime("%M")))
@@ -148,9 +144,8 @@ with tab_data:
         response = conn.table("sales").select("*").execute()
         data = pd.DataFrame(response.data)
         if not data.empty:
-            data['date'] = pd.to_datetime(data['date']).dt.tz_convert('Asia/Kolkata')
-            today_date = datetime.now(IST).date()
-            today_data = data[data['date'].dt.date == today_date]
+            data['date'] = pd.to_datetime(data['date'])
+            today_data = data[data['date'].dt.date == datetime.now().date()]
             completed_data, active_data = today_data[today_data['status'] == 'Completed'], today_data[today_data['status'] == 'Active']
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("💰 Collected", f"₹{completed_data['total'].sum():,.2f}")
@@ -160,7 +155,7 @@ with tab_data:
             st.divider()
             st.dataframe(data.sort_values(by='date', ascending=False), use_container_width=True, hide_index=True)
     except:
-        st.info("No data yet.")
+        st.info("Ready for first entry.")
 
 # --- TAB 4: DAILY REPORTS ---
 with tab_reports:
@@ -169,16 +164,15 @@ with tab_reports:
         response = conn.table("sales").select("*").execute()
         report_data = pd.DataFrame(response.data)
         if not report_data.empty:
-            report_data['date'] = pd.to_datetime(report_data['date']).dt.tz_convert('Asia/Kolkata')
-            selected_date = st.date_input("Export Date", value=datetime.now(IST).date())
+            report_data['date'] = pd.to_datetime(report_data['date'])
+            selected_date = st.date_input("Export Date", value=datetime.now().date())
             export_df = report_data[report_data['date'].dt.date == selected_date]
             if not export_df.empty:
-                csv = export_df.to_csv(index=False).encode('utf-8')
-                st.download_button("Download CSV", csv, f"Export_{selected_date}.csv", "text/csv")
+                st.download_button("Download CSV", export_df.to_csv(index=False).encode('utf-8'), f"Export_{selected_date}.csv", "text/csv")
             else:
                 st.warning("No data for this date.")
     except:
-        st.info("No data available.")
+        st.info("No data.")
 
 # --- TAB 5: DEEP ANALYTICS ---
 with tab_analytics:
@@ -190,9 +184,9 @@ with tab_analytics:
             response = conn.table("sales").select("*").execute()
             df = pd.DataFrame(response.data)
             if not df.empty:
-                df['date'] = pd.to_datetime(df['date']).dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+                df['date'] = pd.to_datetime(df['date'])
                 comp_df = df[df['status'] == 'Completed'].copy()
-                today = datetime.now(IST).date()
+                today = datetime.now().date()
                 s_w, s_m = today - timedelta(days=today.weekday()), today.replace(day=1)
                 l_w_s, l_w_e = s_w - timedelta(days=7), s_w - timedelta(days=1)
                 l_m_e = s_m - timedelta(days=1)
@@ -206,16 +200,16 @@ with tab_analytics:
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.markdown(f"<div class='metric-box'><h4>WTD (Mon-Sun)</h4><h2>₹{wtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='metric-box'><h4>MTD ({today.strftime('%B')})</h4><h2>₹{mtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-box'><h4>WTD</h4><h2>₹{wtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='metric-box'><h4>MTD</h4><h2>₹{mtd['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
                 with c2:
                     st.markdown(f"<div class='metric-box'><h4>Last Week</h4><h2>₹{lw['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='metric-box'><h4>Last Month</h4><h2>₹{lm['total'].sum():,.2f}</h2></div>", unsafe_allow_html=True)
                 
                 st.divider()
                 st.subheader("🖥️ Hardware Performance")
-                h_map = {"PC1": "PC", "PC2": "PC", "PS1": "Playstation 5", "PS2": "Playstation 5", "PS3": "Playstation 5", "SIM1": "Racing Simulator"}
-                comp_df['display_sys'] = comp_df['system'].map(h_map).fillna(comp_df['system'])
+                hw_map = {"PC1": "PC", "PC2": "PC", "PS1": "Playstation 5", "PS2": "Playstation 5", "PS3": "Playstation 5", "SIM1": "Racing Simulator"}
+                comp_df['display_sys'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
                 hw_stats = comp_df.groupby('display_sys').agg(Rev=('total', 'sum'), Hrs=('duration', 'sum')).reset_index()
                 ca, cb = st.columns([1, 1.5])
                 ca.dataframe(hw_stats, hide_index=True)
