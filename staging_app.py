@@ -30,7 +30,6 @@ now_ist = datetime.now(IST)
 if "auth" not in st.session_state: st.session_state.auth = False
 if "cart" not in st.session_state: st.session_state.cart = []
 
-# Memory Locks to prevent UI resets
 if "b_type" not in st.session_state: st.session_state.b_type = "🏃‍♂️ Walk-in (Play Now)"
 if "b_date" not in st.session_state: st.session_state.b_date = now_ist.date()
 if "b_time" not in st.session_state: st.session_state.b_time = now_ist.time()
@@ -128,12 +127,10 @@ with t2:
             phone = st.text_input("Phone Number (Optional)")
             st.write("---")
             
-            # Bound to session state so it doesn't reset
             st.session_state.b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, index=0 if "Walk-in" in st.session_state.b_type else 1)
             
             if "Walk-in" in st.session_state.b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                # Native time picker with 60-second steps (1 minute increments)
                 st.session_state.b_time = st.time_input("Entry Time (HH:MM)", value=st.session_state.b_time, step=60)
                 time_str = st.session_state.b_time.strftime("%I:%M %p")
                 final_status = "Active"
@@ -191,14 +188,12 @@ with t2:
                                 for item in st.session_state.cart:
                                     sys_df = db_df[db_df['system'] == item['system']]
                                     if not sys_df.empty:
-                                        # Calculate exact overlap
                                         new_start = datetime.strptime(f"{sch_date} {time_str}", "%Y-%m-%d %I:%M %p")
                                         new_end = new_start + timedelta(hours=item['duration'])
                                         for _, row in sys_df.iterrows():
                                             db_start = datetime.strptime(f"{sch_date} {row['entry_time']}", "%Y-%m-%d %I:%M %p")
                                             db_end = db_start + timedelta(hours=row['duration'])
                                             
-                                            # If the new time starts before the old one ends AND ends after the old one starts = CONFLICT
                                             if new_start < db_end and new_end > db_start:
                                                 conflict = True
                                                 conflict_msg = f"⚠️ Double Booking! {item['system']} is already reserved from {row['entry_time']} for {row['duration']}h."
@@ -208,7 +203,6 @@ with t2:
                             if conflict:
                                 st.error(conflict_msg)
                             else:
-                                # Safe to insert!
                                 for item in st.session_state.cart:
                                     conn.table("sales_staging").insert({
                                         "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
@@ -222,15 +216,30 @@ with t2:
             else:
                 st.info("Cart is empty.")
         
-        st.subheader(f"📅 Daily Schedule View")
+        # --- NEW: ALL UPCOMING BOOKINGS VIEW ---
+        st.subheader(f"📅 All Upcoming Bookings")
         try:
-            day_res = conn.table("sales_staging").select("customer, system, entry_time, duration").eq("status", "Booked").eq("scheduled_date", sch_date).execute()
-            day_df = pd.DataFrame(day_res.data)
-            if not day_df.empty:
-                st.dataframe(day_df.sort_values(by="entry_time"), hide_index=True, use_container_width=True)
+            today_str_cal = datetime.now(IST).strftime('%Y-%m-%d')
+            up_res = conn.table("sales_staging").select("scheduled_date, entry_time, customer, system, duration").eq("status", "Booked").gte("scheduled_date", today_str_cal).execute()
+            up_df = pd.DataFrame(up_res.data)
+            
+            if not up_df.empty:
+                # Sort everything cleanly by Date, then Time
+                up_df = up_df.sort_values(by=["scheduled_date", "entry_time"])
+                # Rename columns so they look good on the dashboard
+                up_df.rename(columns={
+                    "scheduled_date": "Date", 
+                    "entry_time": "Time", 
+                    "customer": "Name", 
+                    "system": "System", 
+                    "duration": "Hrs"
+                }, inplace=True)
+                
+                st.dataframe(up_df, hide_index=True, use_container_width=True)
             else:
-                st.caption(f"No advance bookings exist for {sch_date} yet.")
-        except: st.caption("Select a date to see schedule.")
+                st.caption("No upcoming bookings found. The calendar is wide open!")
+        except Exception as e: 
+            st.caption(f"Loading schedule... {e}")
 
 # --- TAB 3: DAILY SUMMARY ---
 with t3:
