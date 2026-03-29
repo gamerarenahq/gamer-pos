@@ -25,16 +25,12 @@ st.markdown("""
 
 # --- 2. STATE MANAGEMENT & AUTH ---
 IST = pytz.timezone('Asia/Kolkata')
-now_ist = datetime.now(IST)
 
 if "auth" not in st.session_state: st.session_state.auth = False
 if "cart" not in st.session_state: st.session_state.cart = []
 
-if "f_name" not in st.session_state: st.session_state.f_name = ""
-if "f_phone" not in st.session_state: st.session_state.f_phone = ""
-if "b_type" not in st.session_state: st.session_state.b_type = "🏃‍♂️ Walk-in (Play Now)"
-if "b_date" not in st.session_state: st.session_state.b_date = now_ist.date()
-if "b_time" not in st.session_state: st.session_state.b_time = now_ist.time()
+# THE MASTER RESET KEY
+if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
 if not st.session_state.auth:
     st.title("🔒 Gamerarena Central Login")
@@ -113,12 +109,9 @@ with t1:
                     
                     st.caption(f"⏱️ Actual Time Played: **{played_mins} mins**")
                     
-                    # 40-Minute Rule Logic
                     rec_dur = float(row['duration'])
-                    if played_mins <= 40 and row['duration'] >= 1.0: 
-                        rec_dur = 0.5
-                    elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: 
-                        rec_dur = 1.0
+                    if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
+                    elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                     
                     chk_1, chk_2 = st.columns(2)
                     f_dur = chk_1.number_input("Billed Hrs", 0.5, 12.0, rec_dur, 0.5)
@@ -154,32 +147,33 @@ with t2:
     with col_form:
         st.subheader("1. Lead & Booking Details")
         with st.container(border=True):
-            name = st.text_input("Gamer / Group Name", key="f_name")
-            phone = st.text_input("Phone Number (Optional)", key="f_phone")
+            # All form inputs are now tethered to the Master Reset Key
+            name = st.text_input("Gamer / Group Name", key=f"name_{st.session_state.form_reset}")
+            phone = st.text_input("Phone Number (Optional)", key=f"phone_{st.session_state.form_reset}")
             st.write("---")
             
-            st.session_state.b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, index=0 if "Walk-in" in st.session_state.b_type else 1)
+            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, key=f"type_{st.session_state.form_reset}")
             
-            if "Walk-in" in st.session_state.b_type:
+            if "Walk-in" in b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                st.session_state.b_time = st.time_input("Entry Time (HH:MM)", value=st.session_state.b_time, step=60)
-                time_str = st.session_state.b_time.strftime("%I:%M %p")
+                b_time = st.time_input("Entry Time (HH:MM)", value=datetime.now(IST).time(), step=60, key=f"time_{st.session_state.form_reset}")
+                time_str = b_time.strftime("%I:%M %p")
                 final_status = "Active"
                 btn_txt = "🚀 Start Session Now"
             else:
-                st.session_state.b_date = st.date_input("Select Future Date", value=st.session_state.b_date, min_value=datetime.now(IST).date())
-                sch_date = st.session_state.b_date.strftime('%Y-%m-%d')
-                st.session_state.b_time = st.time_input("Booking Time (HH:MM)", value=st.session_state.b_time, step=60)
-                time_str = st.session_state.b_time.strftime("%I:%M %p")
+                b_date = st.date_input("Select Future Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"date_{st.session_state.form_reset}")
+                sch_date = b_date.strftime('%Y-%m-%d')
+                b_time = st.time_input("Booking Time (HH:MM)", value=datetime.now(IST).time(), step=60, key=f"time_{st.session_state.form_reset}")
+                time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"
                 btn_txt = f"📅 Confirm Reservation for {sch_date}"
 
         st.subheader("2. Add Hardware to Cart")
         with st.container(border=True):
             sys_col, dur_col, ctrl_col = st.columns([2, 1, 1])
-            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()))
-            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5)
-            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0) if "PS" in sel_sys else 0
+            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()), key=f"sys_{st.session_state.form_reset}")
+            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5, key=f"dur_{st.session_state.form_reset}")
+            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
             
             if st.button("➕ Add to Group Cart", use_container_width=True):
                 st.session_state.cart.append({
@@ -205,7 +199,7 @@ with t2:
                 st.markdown(f"### Total: ₹{total_val}")
                 
                 if st.button(btn_txt, type="primary", use_container_width=True):
-                    if not st.session_state.f_name: 
+                    if not name: 
                         st.error("Please provide a Name first.")
                     else:
                         try:
@@ -234,17 +228,14 @@ with t2:
                             else:
                                 for item in st.session_state.cart:
                                     conn.table("sales").insert({
-                                        "customer": st.session_state.f_name, "phone": st.session_state.f_phone, "system": item['system'], "duration": item['duration'], 
+                                        "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
                                         "total": item['price'], "method": "Pending", 
                                         "entry_time": time_str, "status": final_status, "scheduled_date": sch_date
                                     }).execute()
                                 
+                                # WIPER BLADE: Safely trigger the Master Reset Key!
                                 st.session_state.cart = []
-                                st.session_state.f_name = ""
-                                st.session_state.f_phone = ""
-                                st.session_state.b_type = "🏃‍♂️ Walk-in (Play Now)"
-                                st.session_state.b_date = datetime.now(IST).date()
-                                st.session_state.b_time = datetime.now(IST).time()
+                                st.session_state.form_reset += 1
                                 st.success("Processed successfully!")
                                 st.rerun()
                         except Exception as e: st.error(f"Error: {e}")
