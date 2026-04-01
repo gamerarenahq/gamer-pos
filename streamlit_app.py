@@ -28,8 +28,6 @@ IST = pytz.timezone('Asia/Kolkata')
 
 if "auth" not in st.session_state: st.session_state.auth = False
 if "cart" not in st.session_state: st.session_state.cart = []
-
-# THE MASTER RESET KEY
 if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
 if not st.session_state.auth:
@@ -98,7 +96,9 @@ with t1:
                     st.markdown("**⏳ Add More Time**")
                     ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5)
                     if st.button("➕ Extend Session", use_container_width=True):
-                        conn.table("sales").update({"total": row['total'] + get_price(SYSTEMS[row['system']], ext, 0), "duration": row['duration'] + ext}).eq("id", row['id']).execute()
+                        new_dur = float(row['duration']) + float(ext)
+                        new_total = float(row['total']) + float(get_price(SYSTEMS[row['system']], ext, 0))
+                        conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                         st.rerun()
                 with cb:
                     st.markdown("**💳 Smart Checkout**")
@@ -108,18 +108,17 @@ with t1:
                     except: played_mins = 0
                     
                     st.caption(f"⏱️ Actual Time Played: **{played_mins} mins**")
-                    
                     rec_dur = float(row['duration'])
                     if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                     elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                     
                     chk_1, chk_2 = st.columns(2)
-                    f_dur = chk_1.number_input("Billed Hrs", 0.5, 12.0, rec_dur, 0.5)
+                    f_dur = chk_1.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5)
                     f_total = chk_2.number_input("Final Bill (₹)", 0, 10000, int(row['total']), 10)
                     
                     pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, label_visibility="collapsed")
                     if st.button("🛑 Confirm & Close", type="primary", use_container_width=True):
-                        conn.table("sales").update({"status": "Completed", "method": pay, "duration": f_dur, "total": f_total}).eq("id", row['id']).execute()
+                        conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(f_total)}).eq("id", int(row['id'])).execute()
                         st.balloons(); st.rerun()
             else: st.info("Floor is clear.")
         except: st.write("Loading floor...")
@@ -135,7 +134,7 @@ with t1:
                     st.markdown(f"<div style='background:#2B2B40; padding:15px; border-radius:8px; margin-bottom:10px;'><b>{q['entry_time']}</b><br>{q['customer']} ({q['system']})<br>{q['duration']} Hrs</div>", unsafe_allow_html=True)
                     if st.button(f"Check-In {q['system']}", key=f"chk_{q['id']}"):
                         now_time = datetime.now(IST).strftime("%I:%M %p")
-                        conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", q['id']).execute()
+                        conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", int(q['id'])).execute()
                         st.success("Checked In!"); st.rerun()
             else: st.info("No bookings pending.")
         except: st.write("Loading queue...")
@@ -147,7 +146,6 @@ with t2:
     with col_form:
         st.subheader("1. Lead & Booking Details")
         with st.container(border=True):
-            # All form inputs are now tethered to the Master Reset Key
             name = st.text_input("Gamer / Group Name", key=f"name_{st.session_state.form_reset}")
             phone = st.text_input("Phone Number (Optional)", key=f"phone_{st.session_state.form_reset}")
             st.write("---")
@@ -176,10 +174,7 @@ with t2:
             ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
             
             if st.button("➕ Add to Group Cart", use_container_width=True):
-                st.session_state.cart.append({
-                    "system": sel_sys, "duration": dur, "ctrl": ctrl, 
-                    "price": get_price(SYSTEMS[sel_sys], dur, ctrl)
-                })
+                st.session_state.cart.append({"system": sel_sys, "duration": dur, "ctrl": ctrl, "price": get_price(SYSTEMS[sel_sys], dur, ctrl)})
                 st.rerun()
 
     with col_cart:
@@ -217,10 +212,9 @@ with t2:
                                         for _, row in sys_df.iterrows():
                                             db_start = datetime.strptime(f"{sch_date} {row['entry_time']}", "%Y-%m-%d %I:%M %p")
                                             db_end = db_start + timedelta(hours=row['duration'])
-                                            
                                             if new_start < db_end and new_end > db_start:
                                                 conflict = True
-                                                conflict_msg = f"⚠️ Double Booking! {item['system']} is already reserved from {row['entry_time']} for {row['duration']}h."
+                                                conflict_msg = f"⚠️ Double Booking! {item['system']} is reserved from {row['entry_time']} for {row['duration']}h."
                                                 break
                                     if conflict: break
 
@@ -228,12 +222,11 @@ with t2:
                             else:
                                 for item in st.session_state.cart:
                                     conn.table("sales").insert({
-                                        "customer": name, "phone": phone, "system": item['system'], "duration": item['duration'], 
-                                        "total": item['price'], "method": "Pending", 
+                                        "customer": name, "phone": phone, "system": item['system'], "duration": float(item['duration']), 
+                                        "total": float(item['price']), "method": "Pending", 
                                         "entry_time": time_str, "status": final_status, "scheduled_date": sch_date
                                     }).execute()
                                 
-                                # WIPER BLADE: Safely trigger the Master Reset Key!
                                 st.session_state.cart = []
                                 st.session_state.form_reset += 1
                                 st.success("Processed successfully!")
@@ -262,11 +255,9 @@ with t2:
                 with st.container(border=True):
                     e_c1, e_c2, e_c3 = st.columns(3)
                     new_date = e_c1.date_input("New Date", datetime.strptime(e_row['scheduled_date'], '%Y-%m-%d').date(), key="e_date")
-                    
                     try: e_time_obj = datetime.strptime(e_row['entry_time'], "%I:%M %p").time()
                     except: e_time_obj = datetime.now(IST).time()
                     new_time = e_c2.time_input("New Time", value=e_time_obj, step=60, key="e_time")
-                    
                     sys_idx = list(SYSTEMS.keys()).index(e_row['system']) if e_row['system'] in SYSTEMS else 0
                     new_sys = e_c3.selectbox("System", list(SYSTEMS.keys()), index=sys_idx, key="e_sys")
                     
@@ -275,17 +266,19 @@ with t2:
                     new_ctrl = e_c3.number_input("Extra Ctrl", 0, 3, 0, key="e_ctrl") if "PS" in new_sys else 0
                     
                     e_btn1, e_btn2 = st.columns(2)
-                    if e_btn1.button("💾 Save", use_container_width=True):
+                    if e_btn1.button("💾 Save Updates", use_container_width=True):
                         conn.table("sales").update({
                             "scheduled_date": new_date.strftime('%Y-%m-%d'), "entry_time": new_time.strftime("%I:%M %p"),
-                            "system": new_sys, "duration": new_dur, "customer": new_name,
-                            "total": get_price(SYSTEMS[new_sys], new_dur, new_ctrl)
+                            "system": new_sys, "duration": float(new_dur), "customer": new_name,
+                            "total": float(get_price(SYSTEMS[new_sys], new_dur, new_ctrl))
                         }).eq("id", int(e_row['id'])).execute()
                         st.success("Updated!"); st.rerun()
-                    if e_btn2.button("🗑️ Delete", type="primary", use_container_width=True):
-                        conn.table("sales").delete().eq("id", int(e_row['id'])).execute()
-                        st.warning("Deleted!"); st.rerun()
-
+                    
+                    # BUG FIX / UPGRADE: The Cancel button that doesn't add to income
+                    if e_btn2.button("🚫 Cancel Booking (No-Show)", type="primary", use_container_width=True):
+                        # Changes status to Cancelled. Won't show up in revenue, but keeps a record.
+                        conn.table("sales").update({"status": "Cancelled"}).eq("id", int(e_row['id'])).execute()
+                        st.warning("Booking Cancelled!"); st.rerun()
             else: st.caption("No upcoming bookings found.")
         except Exception as e: st.caption(f"Loading schedule... {e}")
 
@@ -326,24 +319,98 @@ with t4:
                 else: st.warning("No records.")
     except: st.info("Select valid dates.")
 
-# --- TAB 5: VAULT ---
+# --- TAB 5: VAULT (THE ERP UPGRADE) ---
 with t5:
-    st.subheader("🔐 Intelligence Vault")
+    st.subheader("🔐 Master Intelligence Vault")
     if st.text_input("Master Key", type="password") == "Shreenad@0511":
         try:
+            # 1. Fetch Sales Data
             raw_v = conn.table("sales").select("*").execute()
             vdf = pd.DataFrame(raw_v.data)
+            
+            # 2. Add New Expense Form
+            with st.expander("💸 Record Daily Expense", expanded=False):
+                with st.form("expense_form", clear_on_submit=True):
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    e_desc = col_e1.text_input("Expense Details (e.g. Snacks, Electricity)")
+                    e_amt = col_e2.number_input("Amount (₹)", min_value=0)
+                    e_method = col_e3.selectbox("Paid Via", ["Cash", "UPI"])
+                    
+                    if st.form_submit_button("Log Expense"):
+                        if e_desc and e_amt > 0:
+                            conn.table("expenses").insert({
+                                "expense_date": datetime.now(IST).strftime('%Y-%m-%d'),
+                                "category": e_desc,
+                                "amount": float(e_amt),
+                                "method": e_method
+                            }).execute()
+                            st.success(f"Logged ₹{e_amt} for {e_desc}")
+                            st.rerun()
+
+            st.divider()
+
             if not vdf.empty:
                 vdf['date_str'] = vdf['date'].str[:10]
-                pdf = vdf[vdf['status'] == 'Completed'].copy()
+                comp_df = vdf[vdf['status'] == 'Completed'].copy()
+                
+                # --- WTD / MTD METRICS ---
                 now = datetime.now(IST)
                 s_tw = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')
                 s_tm = now.replace(day=1).strftime('%Y-%m-%d')
                 c1, c2 = st.columns(2)
-                c1.markdown(f"<div class='metric-box'><h4>WTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tw]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                c2.markdown(f"<div class='metric-box'><h4>MTD Revenue</h4><h2 style='color:#34D399;'>₹{pdf[pdf['date_str'] >= s_tm]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                st.divider()
-                h_map = {"PC1":"PC","PC2":"PC","PS1":"Playstation 5","PS2":"Playstation 5","PS3":"Playstation 5","SIM1":"Racing Simulator"}
-                pdf['Hardware'] = pdf['system'].map(h_map).fillna(pdf['system'])
-                st.bar_chart(pdf.groupby('Hardware')['total'].sum(), color="#4F46E5")
-        except: st.error("Vault processing error.")
+                c1.markdown(f"<div class='metric-box'><h4>WTD Gross Revenue</h4><h2 style='color:#34D399;'>₹{comp_df[comp_df['date_str'] >= s_tw]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><h4>MTD Gross Revenue</h4><h2 style='color:#34D399;'>₹{comp_df[comp_df['date_str'] >= s_tm]['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                
+                st.write("---")
+                
+                # --- DAY-WISE INCOME & EXPENSE LEDGER ---
+                st.subheader("📅 Day-Wise Profit & Loss Ledger")
+                
+                # Calculate Daily Income
+                cash_inc = comp_df[comp_df['method'] == 'Cash'].groupby('date_str')['total'].sum().rename('Cash Income')
+                upi_inc = comp_df[comp_df['method'] != 'Cash'].groupby('date_str')['total'].sum().rename('UPI Income')
+                tot_inc = comp_df.groupby('date_str')['total'].sum().rename('Gross Income')
+                
+                inc_summary = pd.concat([tot_inc, cash_inc, upi_inc], axis=1).fillna(0).reset_index()
+                inc_summary.rename(columns={'date_str': 'Date'}, inplace=True)
+                
+                # Fetch & Calculate Daily Expenses
+                exp_raw = conn.table("expenses").select("*").execute()
+                exp_df = pd.DataFrame(exp_raw.data)
+                
+                if not exp_df.empty:
+                    exp_summary = exp_df.groupby('expense_date')['amount'].sum().rename('Total Expenses').reset_index()
+                    exp_summary.rename(columns={'expense_date': 'Date'}, inplace=True)
+                    # Merge Income and Expenses
+                    master_ledger = pd.merge(inc_summary, exp_summary, on='Date', how='outer').fillna(0)
+                else:
+                    master_ledger = inc_summary
+                    master_ledger['Total Expenses'] = 0
+                
+                # Calculate Net Profit
+                master_ledger['Net Profit'] = master_ledger['Gross Income'] - master_ledger['Total Expenses']
+                master_ledger = master_ledger.sort_values('Date', ascending=False)
+                
+                st.dataframe(master_ledger, hide_index=True, use_container_width=True)
+
+                st.write("---")
+                
+                # --- HARDWARE UTILIZATION TRACKER ---
+                st.subheader("⚙️ Lifetime Hardware Utilization")
+                h_map = {"PC1":"PC", "PC2":"PC", "PS1":"Playstation 5", "PS2":"Playstation 5", "PS3":"Playstation 5", "SIM1":"Racing Simulator"}
+                comp_df['Hardware Type'] = comp_df['system'].map(h_map).fillna(comp_df['system'])
+                
+                # Grouping for both hours and revenue
+                hw_summary = comp_df.groupby('Hardware Type').agg(
+                    Total_Revenue=('total', 'sum'),
+                    Total_Hours_Run=('duration', 'sum')
+                ).reset_index()
+                
+                ch_col1, ch_col2 = st.columns([1, 1.5])
+                with ch_col1:
+                    st.dataframe(hw_summary, hide_index=True, use_container_width=True)
+                with ch_col2:
+                    st.bar_chart(hw_summary.set_index('Hardware Type')['Total_Revenue'], color="#4F46E5")
+
+            else: st.warning("No completed data found.")
+        except Exception as e: st.error(f"Vault processing error: {e}")
