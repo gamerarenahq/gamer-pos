@@ -32,13 +32,10 @@ if "cafe_cart" not in st.session_state: st.session_state.cafe_cart = []
 if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
 if not st.session_state.auth:
-    st.title("🔒 Gamerarena Central Login")
-    pwd = st.text_input("Enter Staff Passcode", type="password")
-    if st.button("Login"):
-        if pwd == "Admin@2026":
-            st.session_state.auth = True; st.rerun()
-        else: st.error("❌ Invalid Passcode")
-    st.stop()
+if "auth" not in st.session_state: st.session_state.auth = False
+if "cart" not in st.session_state: st.session_state.cart = []
+if "cafe_cart" not in st.session_state: st.session_state.cafe_cart = [] 
+if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
 # --- 3. DATABASE & PRICING ---
 try: conn = st.connection("supabase", type=SupabaseConnection)
