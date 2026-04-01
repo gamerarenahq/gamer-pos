@@ -26,16 +26,20 @@ st.markdown("""
 # --- 2. STATE MANAGEMENT & AUTH ---
 IST = pytz.timezone('Asia/Kolkata')
 
+# CRITICAL: This block prevents the "unhashable dict" cache error
 if "auth" not in st.session_state: st.session_state.auth = False
 if "cart" not in st.session_state: st.session_state.cart = []
 if "cafe_cart" not in st.session_state: st.session_state.cafe_cart = [] 
 if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
 if not st.session_state.auth:
-if "auth" not in st.session_state: st.session_state.auth = False
-if "cart" not in st.session_state: st.session_state.cart = []
-if "cafe_cart" not in st.session_state: st.session_state.cafe_cart = [] 
-if "form_reset" not in st.session_state: st.session_state.form_reset = 0
+    st.title("🔒 Gamerarena Central Login")
+    pwd = st.text_input("Enter Staff Passcode", type="password")
+    if st.button("Login"):
+        if pwd == "Admin@2026":
+            st.session_state.auth = True; st.rerun()
+        else: st.error("❌ Invalid Passcode")
+    st.stop()
 
 # --- 3. DATABASE & PRICING ---
 try: conn = st.connection("supabase", type=SupabaseConnection)
@@ -49,6 +53,7 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
+# EXACT HARDCODED MENU (Selling Price vs Vendor Cost)
 CAFE_MENU = {
     "🍟 Finger Food & Fries": {
         "Veggie Nuggets": {"sell": 209, "cost": 160},
@@ -116,7 +121,6 @@ with t1:
                 elif time_left <= 5: cc, txt = "warning-card", f"⚠️ {int(time_left)}m REMAINING"
                 else: cc, txt = "crm-card", f"⏳ {int(time_left)}m remaining"
                 
-                # Show food badge if they ordered something
                 food_val = float(row.get('fnb_total') or 0)
                 food_badge = f" | 🍔 Food: ₹{food_val}" if food_val > 0 else ""
                 
@@ -144,7 +148,6 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                # Display gaming and food separate, but calculate a Grand Total
                 food_val = float(row.get('fnb_total') or 0)
                 
                 chk_1, chk_2 = st.columns(2)
@@ -160,21 +163,144 @@ with t1:
                 pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, label_visibility="collapsed")
                 
                 if st.button("🛑 Collect & Close Out", type="primary", use_container_width=True):
-                    # We only update the Game Bill in the 'total' column so the Vault metrics stay accurate!
                     conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(game_bill)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
         else: st.info("Floor is clear.")
     except: st.write("Loading floor...")
 
 # ==========================================
-# TAB 2: BOOKINGS (REMAINS UNCHANGED)
+# TAB 2: BOOKINGS & CART
 # ==========================================
 with t2:
-    st.info("Booking Cart is running normally.")
-    # (Leaving this brief in snippet so you don't hit character limits, it runs from your existing code in the background)
+    col_form, col_cart = st.columns([1.2, 1], gap="large")
+    with col_form:
+        st.subheader("1. Lead & Booking Details")
+        with st.container(border=True):
+            name = st.text_input("Gamer / Group Name", key=f"name_{st.session_state.form_reset}")
+            phone = st.text_input("Phone Number (Optional)", key=f"phone_{st.session_state.form_reset}")
+            st.write("---")
+            
+            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, key=f"type_{st.session_state.form_reset}")
+            
+            if "Walk-in" in b_type:
+                sch_date = datetime.now(IST).strftime('%Y-%m-%d')
+                b_time = st.time_input("Entry Time (HH:MM)", value=datetime.now(IST).time(), step=60, key=f"time_{st.session_state.form_reset}")
+                time_str = b_time.strftime("%I:%M %p")
+                final_status = "Active"
+                btn_txt = "🚀 Start Session Now"
+            else:
+                b_date = st.date_input("Select Future Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"date_{st.session_state.form_reset}")
+                sch_date = b_date.strftime('%Y-%m-%d')
+                b_time = st.time_input("Booking Time (HH:MM)", value=datetime.now(IST).time(), step=60, key=f"time_{st.session_state.form_reset}")
+                time_str = b_time.strftime("%I:%M %p")
+                final_status = "Booked"
+                btn_txt = f"📅 Confirm Reservation for {sch_date}"
+
+        st.subheader("2. Add Hardware to Cart")
+        with st.container(border=True):
+            sys_col, dur_col, ctrl_col = st.columns([2, 1, 1])
+            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()), key=f"sys_{st.session_state.form_reset}")
+            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5, key=f"dur_{st.session_state.form_reset}")
+            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
+            
+            if st.button("➕ Add to Group Cart", use_container_width=True):
+                st.session_state.cart.append({"system": sel_sys, "duration": dur, "ctrl": ctrl, "price": get_price(SYSTEMS[sel_sys], dur, ctrl)})
+                st.rerun()
+
+    with col_cart:
+        st.subheader("🛒 Current Cart")
+        with st.container(border=True):
+            if st.session_state.cart:
+                for i, item in enumerate(st.session_state.cart):
+                    c_info, c_price, c_del = st.columns([3, 1.5, 1])
+                    c_info.write(f"🎮 **{item['system']}** ({item['duration']}h)")
+                    c_price.write(f"₹{item['price']}")
+                    if c_del.button("❌", key=f"del_{i}_{st.session_state.form_reset}"):
+                        st.session_state.cart.pop(i); st.rerun()
+                
+                st.divider()
+                total_val = sum(item['price'] for item in st.session_state.cart)
+                st.markdown(f"### Total: ₹{total_val}")
+                
+                if st.button(btn_txt, type="primary", use_container_width=True):
+                    if not name: st.error("Please provide a Name first.")
+                    else:
+                        try:
+                            conflict = False; conflict_msg = ""
+                            res = conn.table("sales").select("system, entry_time, duration").eq("scheduled_date", sch_date).in_("status", ["Active", "Booked"]).execute()
+                            db_df = pd.DataFrame(res.data)
+
+                            if not db_df.empty:
+                                for item in st.session_state.cart:
+                                    sys_df = db_df[db_df['system'] == item['system']]
+                                    if not sys_df.empty:
+                                        new_start = datetime.strptime(f"{sch_date} {time_str}", "%Y-%m-%d %I:%M %p")
+                                        new_end = new_start + timedelta(hours=item['duration'])
+                                        for _, row in sys_df.iterrows():
+                                            db_start = datetime.strptime(f"{sch_date} {row['entry_time']}", "%Y-%m-%d %I:%M %p")
+                                            db_end = db_start + timedelta(hours=row['duration'])
+                                            if new_start < db_end and new_end > db_start:
+                                                conflict = True; conflict_msg = f"⚠️ Double Booking! {item['system']} is reserved from {row['entry_time']} for {row['duration']}h."
+                                                break
+                                    if conflict: break
+
+                            if conflict: st.error(conflict_msg)
+                            else:
+                                for item in st.session_state.cart:
+                                    conn.table("sales").insert({
+                                        "customer": name, "phone": phone, "system": item['system'], "duration": float(item['duration']), 
+                                        "total": float(item['price']), "method": "Pending", 
+                                        "entry_time": time_str, "status": final_status, "scheduled_date": sch_date
+                                    }).execute()
+                                st.session_state.cart = []; st.session_state.form_reset += 1; st.success("Processed successfully!"); st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
+            else: st.info("Cart is empty.")
+            
+        st.subheader(f"📅 Upcoming Bookings")
+        try:
+            today_str_cal = datetime.now(IST).strftime('%Y-%m-%d')
+            up_res = conn.table("sales").select("id, scheduled_date, entry_time, customer, system, duration").eq("status", "Booked").gte("scheduled_date", today_str_cal).execute()
+            up_df = pd.DataFrame(up_res.data)
+            
+            if not up_df.empty:
+                display_df = up_df.copy().sort_values(by=["scheduled_date", "entry_time"])
+                display_df.rename(columns={"scheduled_date": "Date", "entry_time": "Time", "customer": "Name", "system": "System", "duration": "Hrs"}, inplace=True)
+                st.dataframe(display_df[['Date', 'Time', 'Name', 'System', 'Hrs']], hide_index=True, use_container_width=True)
+                
+                st.write("✏️ **Edit or Cancel a Booking**")
+                up_df['lbl'] = up_df['scheduled_date'] + " " + up_df['entry_time'] + " | " + up_df['customer'] + " (" + up_df['system'] + ")"
+                sel_edit = st.selectbox("Select Booking", up_df['lbl'].tolist(), label_visibility="collapsed")
+                e_row = up_df[up_df['lbl'] == sel_edit].iloc[0]
+                
+                with st.container(border=True):
+                    e_c1, e_c2, e_c3 = st.columns(3)
+                    new_date = e_c1.date_input("New Date", datetime.strptime(e_row['scheduled_date'], '%Y-%m-%d').date(), key="e_date")
+                    try: e_time_obj = datetime.strptime(e_row['entry_time'], "%I:%M %p").time()
+                    except: e_time_obj = datetime.now(IST).time()
+                    new_time = e_c2.time_input("New Time", value=e_time_obj, step=60, key="e_time")
+                    sys_idx = list(SYSTEMS.keys()).index(e_row['system']) if e_row['system'] in SYSTEMS else 0
+                    new_sys = e_c3.selectbox("System", list(SYSTEMS.keys()), index=sys_idx, key="e_sys")
+                    
+                    new_dur = e_c1.number_input("Hrs", 0.5, 12.0, float(e_row['duration']), 0.5, key="e_dur")
+                    new_name = e_c2.text_input("Name", e_row['customer'], key="e_name")
+                    new_ctrl = e_c3.number_input("Extra Ctrl", 0, 3, 0, key="e_ctrl") if "PS" in new_sys else 0
+                    
+                    eb1, eb2 = st.columns(2)
+                    if eb1.button("💾 Save Updates", use_container_width=True):
+                        conn.table("sales").update({
+                            "scheduled_date": new_date.strftime('%Y-%m-%d'), "entry_time": new_time.strftime("%I:%M %p"),
+                            "system": new_sys, "duration": float(new_dur), "customer": new_name,
+                            "total": float(get_price(SYSTEMS[new_sys], new_dur, new_ctrl))
+                        }).eq("id", int(e_row['id'])).execute()
+                        st.success("Updated!"); st.rerun()
+                    if eb2.button("🚫 Cancel Booking (No-Show)", type="primary", use_container_width=True):
+                        conn.table("sales").update({"status": "Cancelled"}).eq("id", int(e_row['id'])).execute()
+                        st.warning("Booking Cancelled!"); st.rerun()
+            else: st.caption("No upcoming bookings.")
+        except: pass
 
 # ==========================================
-# TAB 3: THE CAFE POS (WITH DROPDOWN & CUSTOM ITEMS)
+# TAB 3: THE CAFE POS 
 # ==========================================
 with t_cafe:
     pos_grid, pos_receipt = st.columns([2, 1], gap="large")
@@ -206,16 +332,14 @@ with t_cafe:
             custom_price = cc2.number_input("Price (₹)", min_value=0, key=f"c_price_{st.session_state.form_reset}")
             if cc3.button("➕ Add", use_container_width=True):
                 if custom_name and custom_price > 0:
-                    st.session_state.cafe_cart.append({"name": custom_name, "qty": 1, "price": custom_price, "total": custom_price, "cost": 0, "margin": custom_price}) # 100% Cafe Profit
+                    st.session_state.cafe_cart.append({"name": custom_name, "qty": 1, "price": custom_price, "total": custom_price, "cost": 0, "margin": custom_price})
                     st.rerun()
 
     with pos_receipt:
         st.subheader("🧾 Live Receipt")
         with st.container(border=True):
-            # THE MAGIC DROPDOWN
             bill_target = st.selectbox("Assign Order To:", active_list, key=f"bill_{st.session_state.form_reset}")
             
-            # If it's a walk-in, we need their name. If it's a gamer, we already have their name.
             c_name = "Player"
             if bill_target == "🚶‍♂️ Walk-in (Cafe Only)":
                 c_name = st.text_input("Walk-in Name (Optional)", key=f"w_name_{st.session_state.form_reset}")
@@ -247,7 +371,6 @@ with t_cafe:
                 if st.button(btn_txt, type="primary", use_container_width=True):
                     items_str = ", ".join([f"{x['qty']}x {x['name']}" for x in st.session_state.cafe_cart])
                     
-                    # 1. ALWAYS log to cafe_orders so Vault knows how much to pay Hunger Monkey
                     conn.table("cafe_orders").insert({
                         "date": datetime.now(IST).strftime('%Y-%m-%d'), "time": datetime.now(IST).strftime("%I:%M %p"),
                         "customer": bill_target if bill_target != "🚶‍♂️ Walk-in (Cafe Only)" else (c_name or "Walk-in"), 
@@ -255,26 +378,94 @@ with t_cafe:
                         "total_cost": float(total_cost), "profit": float(total_profit), "method": f_pay
                     }).execute()
                     
-                    # 2. IF IT IS A PLAYER, push the bill to their active gaming session
                     if bill_target != "🚶‍♂️ Walk-in (Cafe Only)":
                         p_row = active_df[(active_df['customer'] + " | " + active_df['system']) == bill_target].iloc[0]
                         curr_items = p_row.get('fnb_items', "")
                         new_items = (curr_items + " | " + items_str) if curr_items else items_str
                         new_fnb_total = float(p_row.get('fnb_total') or 0) + float(gross_total)
                         
-                        conn.table("sales").update({
-                            "fnb_items": new_items, "fnb_total": new_fnb_total
-                        }).eq("id", int(p_row['id'])).execute()
+                        conn.table("sales").update({"fnb_items": new_items, "fnb_total": new_fnb_total}).eq("id", int(p_row['id'])).execute()
 
-                    st.session_state.cafe_cart = []
-                    st.session_state.form_reset += 1
-                    st.success("Order Processed!")
-                    st.rerun()
+                    st.session_state.cafe_cart = []; st.session_state.form_reset += 1; st.success("Order Processed!"); st.rerun()
             else:
                 st.info("Tap menu items to build receipt.")
 
 # ==========================================
-# TAB 6: VAULT (REMAINS UNCHANGED)
+# TAB 4: DAILY SUMMARY
+# ==========================================
+with t3:
+    st.subheader("📊 Today's Snapshot")
+    try:
+        raw = conn.table("sales").select("*").execute()
+        df = pd.DataFrame(raw.data)
+        if not df.empty:
+            df['date_str'] = df['date'].str[:10] 
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            t_df = df[df['date_str'] == today_str]
+            comp = t_df[t_df['status'] == 'Completed']
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Cash Collected", f"₹{comp[comp['method']=='Cash']['total'].sum():,.0f}")
+            m2.metric("UPI Collected", f"₹{comp[comp['method']!='Cash']['total'].sum():,.0f}")
+            m3.metric("Total Gaming Rev", f"₹{comp['total'].sum():,.0f}")
+            m4.metric("Pending on Floor", f"₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}")
+            st.dataframe(t_df.sort_values('date', ascending=False), use_container_width=True, hide_index=True)
+    except: st.error("Error loading summary.")
+
+# ==========================================
+# TAB 5: REPORTS
+# ==========================================
+with t4:
+    st.subheader("📅 Deep Filter Reports")
+    d_range = st.date_input("Date Range", [datetime.now(IST).date(), datetime.now(IST).date()])
+    try:
+        if len(d_range) == 2:
+            s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
+            raw_e = conn.table("sales").select("*").execute()
+            edf = pd.DataFrame(raw_e.data)
+            if not edf.empty:
+                edf['date_str'] = edf['date'].str[:10]
+                f_edf = edf[(edf['date_str'] >= s_dt) & (edf['date_str'] <= e_dt)]
+                if not f_edf.empty:
+                    st.download_button("📥 Export Range", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv")
+                    st.dataframe(f_edf, hide_index=True)
+                else: st.warning("No records.")
+    except: st.info("Select valid dates.")
+
+# ==========================================
+# TAB 6: VAULT
 # ==========================================
 with t5:
-    st.info("Vault is calculating Payouts perfectly.")
+    st.subheader("🔐 Master Intelligence Vault")
+    if st.text_input("Master Key", type="password", key="vkey") == "Shreenad@0511":
+        try:
+            # GAMING METRICS
+            raw_v = conn.table("sales").select("*").execute()
+            vdf = pd.DataFrame(raw_v.data)
+            if not vdf.empty:
+                vdf['date_str'] = vdf['date'].str[:10]
+                comp_df = vdf[vdf['status'] == 'Completed']
+                tot_gaming = comp_df['total'].sum()
+                st.markdown(f"<div class='metric-box'><h4>Total Gaming Revenue</h4><h2 style='color:#34D399;'>₹{tot_gaming:,.0f}</h2></div>", unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # CAFE / F&B METRICS
+            st.subheader("🍔 Hunger Monkey Payout Dashboard")
+            raw_c = conn.table("cafe_orders").select("*").execute()
+            cdf = pd.DataFrame(raw_c.data)
+            
+            if not cdf.empty:
+                today_str = datetime.now(IST).strftime('%Y-%m-%d')
+                today_cafe = cdf[cdf['date'] == today_str]
+                
+                f1, f2, f3 = st.columns(3)
+                f1.metric("Today's Food Sales (Gross)", f"₹{today_cafe['total_revenue'].sum():,.0f}")
+                f2.metric("Cafe Profit (Net)", f"₹{today_cafe['profit'].sum():,.0f}")
+                f3.metric("Owed to Vendor", f"₹{today_cafe['total_cost'].sum():,.0f}", delta="- Vendor Payout", delta_color="inverse")
+                
+                st.write("**Recent Food Orders**")
+                st.dataframe(cdf[['date', 'time', 'customer', 'items', 'total_revenue', 'method']].sort_values('date', ascending=False), hide_index=True, use_container_width=True)
+            else:
+                st.caption("No food orders processed yet.")
+                
+        except Exception as e: st.error(f"Vault error: {e}")
