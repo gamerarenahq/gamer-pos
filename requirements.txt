@@ -1,5 +1,7 @@
 streamlit
 st-supabase-connection
 pandas
+numpy
 pytz
 streamlit-autorefresh
+plotly
