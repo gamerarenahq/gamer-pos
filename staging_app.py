@@ -1,327 +1,196 @@
 import streamlit as st
+from st_supabase_connection import SupabaseConnection
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import pytz
-import json
-from supabase import create_client, Client
-import os
+from streamlit_autorefresh import st_autorefresh
+import plotly.express as px
 
-# Initialize session state at the VERY TOP to prevent unhashable dict errors
-if 'cart' not in st.session_state:
-    st.session_state.cart = []
-if 'cafe_cart' not in st.session_state:
-    st.session_state.cafe_cart = []
-if 'form_reset' not in st.session_state:
-    st.session_state.form_reset = 0
-if 'active_sales' not in st.session_state:
-    st.session_state.active_sales = pd.DataFrame()
-if 'supabase_client' not in st.session_state:
-    st.session_state.supabase_client = None
+# --- 1. GLOBAL DESIGN & CONFIG ---
+st.set_page_config(page_title="Gamerarena Unified POS", page_icon="🎮", layout="wide")
+st_autorefresh(interval=60000, limit=None, key="crm_refresh")
 
-# Timezone setup - STRICTLY Asia/Kolkata
+# Master Color Palette: Ice Blue Theme
+ga_colors = {
+    'bg': '#0F1117',
+    'card_bg': '#161922',
+    'accent': '#6C5DD3',    # Purple Accent
+    'ice_blue': '#98DED9',  # REPLACED GREEN WITH ICE BLUE
+    'warning': '#FF754C',   # Orange
+    'text': '#E0E7FF'
+}
+
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: {ga_colors['bg']}; color: {ga_colors['text']}; }}
+    h1, h2, h3, h4, p, span {{ color: {ga_colors['text']} !important; font-family: 'Inter', sans-serif; }}
+    
+    /* GA-Card Styling */
+    .ga-card {{ background-color: {ga_colors['card_bg']}; padding: 25px; border-radius: 12px; border: 1px solid #2B2F3A; margin-bottom: 15px; position: relative; }}
+    .ga-card-active {{ border-left: 5px solid {ga_colors['ice_blue']}; box-shadow: 0 0 15px rgba(152, 222, 217, 0.1); }}
+    .ga-card-warning {{ border-left: 5px solid {ga_colors['warning']}; animation: pulse_border 2s infinite; }}
+    .ga-card-overdue {{ border-left: 5px solid #EF4444; border: 2px solid #EF4444; }}
+    
+    .card-title {{ font-size: 18px; font-weight: 700; color: {ga_colors['text']}; margin-bottom: 5px; }}
+    .card-subtitle {{ font-size: 14px; color: #9CA3AF; margin-bottom: 15px; }}
+    .card-metric {{ font-size: 24px; font-weight: 800; color: {ga_colors['ice_blue']}; }}
+    
+    /* Re-theming Tabs */
+    .stTabs [aria-selected="true"] {{ color: {ga_colors['ice_blue']} !important; border: 1px solid {ga_colors['ice_blue']} !important; }}
+    
+    /* Buttons */
+    .stButton>button {{ background: linear-gradient(135deg, {ga_colors['accent']} 0%, #8C7CFF 100%); color: white; border-radius: 8px; border: none; font-weight: 600; }}
+    
+    @keyframes pulse_border {{ 0% {{ border-left-color: {ga_colors['warning']}; }} 50% {{ border-left-color: rgba(255,117,76,0.2); }} 100% {{ border-left-color: {ga_colors['warning']}; }} }}
+</style>
+""", unsafe_allow_html=True)
+
+# --- 2. STATE & AUTH ---
 IST = pytz.timezone('Asia/Kolkata')
-now = datetime.now(IST)
+if "auth" not in st.session_state: st.session_state.auth = False
+if "cart" not in st.session_state: st.session_state.cart = []
+if "form_reset" not in st.session_state: st.session_state.form_reset = 0
 
-# Exact Pricing Rules - DO NOT DEVIATE
-GAMING_PRICES = {
-    'PS1': {'1h': 150, '0.5h': 100},
-    'PS2': {'1h': 150, '0.5h': 100},
-    'PS3': {'1h': 150, '0.5h': 100},
-    'PC1': {'1h': 100, '0.5h': 70},
-    'PC2': {'1h': 100, '0.5h': 70},
-    'SIM1': {'1h': 250, '0.5h': 150}
-}
+if not st.session_state.auth:
+    st.title("🔒 Gamerarena Central Login")
+    pwd = st.text_input("Passcode", type="password")
+    if st.button("Login"):
+        if pwd == "Admin@2026": st.session_state.auth = True; st.rerun()
+        else: st.error("❌ Wrong Passcode")
+    st.stop()
 
-CAFE_MENU = {
-    "Fries & Snacks": {
-        "Veggie Nuggets": {"sell": 209, "cost": 160}, 
-        "Veg Cheese Balls": {"sell": 229, "cost": 180},
-        "Salted French Fries": {"sell": 139, "cost": 100}, 
-        "Cheesy French Fries": {"sell": 179, "cost": 140}
-    },
-    "Burgers & Meals": {
-        "Tikki Tango Burger": {"sell": 89, "cost": 50}, 
-        "Tikki Tango Meal": {"sell": 199, "cost": 149},
-        "Paneer Pataka Meal": {"sell": 229, "cost": 169}, 
-        "Big Crunch Burger": {"sell": 229, "cost": 99}
-    },
-    "Beverages": {
-        "Cold Coffee": {"sell": 129, "cost": 99}, 
-        "Oreo Milkshake": {"sell": 179, "cost": 150},
-        "Blue Lagoon Mocktail": {"sell": 129, "cost": 99}
-    }
-}
+# --- 3. DATABASE & LOGIC ---
+try: conn = st.connection("supabase", type=SupabaseConnection)
+except: st.error("Database Connection Lost."); st.stop()
 
-# Supabase Configuration - Put these in Streamlit Secrets (secrets.toml)
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
-SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY", os.getenv("SUPABASE_ANON_KEY"))
+SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
+FLAT_MENU = ["Custom Item...","Veggie Nuggets - ₹209","Chilli Garlic Bites - ₹209","Veg Cheese Balls - ₹229","Jalapeno Poppers - ₹230","Pizza Fingers - ₹229","Salted French Fries - ₹139","Peri-Peri French Fries - ₹159","Chilli Garlic French Fries - ₹169","Cheesy French Fries - ₹179","Tikki Tango Burger - ₹89","Tikki Tango Meal - ₹199","Peri Peri Mini Burger - ₹119","Peri Peri Mini Meal - ₹229","Paneer Pataka Burger - ₹230","Paneer Pataka Meal - ₹229","Big Crunch Burger - ₹229","Big Crunch Meal - ₹239","Cold Coffee - ₹129","Vanilla Milkshake - ₹149","Irish Cold Coffee - ₹159","Cold Chocolate - ₹169","Oreo Milkshake - ₹179","Blue Lagoon - ₹129","Green Apple Mojito - ₹129","Lime Ice Tea - ₹129","Mint Mojito - ₹129","Chilli Guava - ₹129","Black Current - ₹129","Watermelon - ₹129","Paan - ₹129","Pineapple - ₹129","Blueberry - ₹129"]
 
-@st.cache_resource
-def init_supabase():
-    """Initialize Supabase client - STANDARD supabase-py"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("❌ **Supabase credentials missing!** Add to `secrets.toml`:")
-        st.code("""
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your-anon-key"
-        """)
-        return None
-    
-    try:
-        client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Test connection
-        client.table("sales").select("count").limit(1).execute()
-        st.success("✅ Supabase connected!")
-        return client
-    except Exception as e:
-        st.error(f"❌ Supabase connection failed: {str(e)}")
-        return None
+def get_price(cat, dur, extra=0):
+    if cat == "PS5": return (int(dur) * (150 + (extra * 100))) + ((1 if (dur % 1) != 0 else 0) * (100 + (extra * 100)))
+    elif cat == "PC": return (int(dur) * 100) + ((1 if (dur % 1) != 0 else 0) * 70)
+    elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
+    return 0
 
-def sanitize_for_supabase(value):
-    """CRITICAL: Prevent NaN crashes in Supabase API"""
-    if pd.isna(value) or value is None or str(value).lower() in ['nan', 'none']:
-        return 0.0 if isinstance(value, (int, float)) else ""
-    if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
-        return 0.0
-    return value
+# --- 4. TABS ---
+t1, t2, t3, t4, t5 = st.tabs(["🕹️ Live Floor", "📝 Bookings", "📊 Daily Snapshot", "📅 Reports", "🧠 Vault"])
 
-def df_from_supabase(client, table_name, filters=None):
-    """Fetch data as pandas DataFrame"""
-    if not client:
-        return pd.DataFrame()
-    
-    try:
-        query = client.table(table_name).select("*")
-        if filters:
-            query = query.eq(filters['column'], filters['value'])
-        response = query.execute()
-        df = pd.DataFrame(response.data)
-        # Convert numeric columns
-        numeric_cols = ['total', 'fnb_total', 'duration', 'profit']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = df[col].apply(sanitize_for_supabase)
-        return df
-    except:
-        return pd.DataFrame()
+# ==========================================
+# TAB 1: LIVE FLOOR (ICE BLUE THEME)
+# ==========================================
+with t1:
+    col_timers, col_manage = st.columns([2, 1])
+    with col_timers:
+        st.subheader("Current Sessions")
+        try:
+            res = conn.table("sales").select("*").eq("status", "Active").execute()
+            active_df = pd.DataFrame(res.data)
+            if not active_df.empty:
+                t_cols = st.columns(2)
+                for i, (_, row) in enumerate(active_df.iterrows()):
+                    with t_cols[i % 2]:
+                        try:
+                            entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
+                            time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
+                        except: time_left = 0
+                        
+                        # Style logic
+                        cc = "active" if time_left > 10 else ("warning" if time_left > 0 else "overdue")
+                        
+                        st.markdown(f"""
+                        <div class='ga-card ga-card-{cc}'>
+                            <p class='card-title'>{row['system']} | {row['customer']}</p>
+                            <p class='card-metric'>{int(time_left)}m remaining</p>
+                            <p style='font-size:12px;color:#9CA3AF;'>Total Bill: ₹{row['total'] + (row.get('fnb_total') or 0):.0f}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else: st.info("Floor is clear.")
+        except: st.write("Loading...")
 
-def get_today_date():
-    return now.strftime("%Y-%m-%d")
-
-def get_now_datetime():
-    return now.strftime("%Y-%m-%d %H:%M:%S+05:30")
-
-def get_time_12hr():
-    return now.strftime("%I:%M %p")
-
-def calculate_remaining_time(entry_time_str, duration_hours):
-    """Calculate live remaining time"""
-    try:
-        # Parse 12hr format
-        entry_dt = datetime.strptime(entry_time_str, "%I:%M %p").replace(
-            year=now.year, month=now.month, day=now.day
-        )
-        entry_dt = IST.localize(entry_dt)
-        end_time = entry_dt + timedelta(hours=float(duration_hours))
-        remaining = max(0, (end_time - now).total_seconds() / 3600)
-        return remaining
-    except:
-        return 0
-
-def calculate_gaming_price(system, hours):
-    """Exact gaming pricing logic"""
-    base_key = '1h' if hours >= 1 else '0.5h'
-    return GAMING_PRICES.get(system, {}).get(base_key, 0)
-
-# === MAIN APP ===
-st.set_page_config(page_title="🎮 Gaming Cafe POS & ERP", layout="wide")
-st.title("🎮 Gaming Cafe POS & ERP System")
-st.caption("✅ Production Ready • Asia/Kolkata • Auto NaN Safe")
-
-# Initialize Supabase ONCE
-if st.session_state.supabase_client is None:
-    st.session_state.supabase_client = init_supabase()
-client = st.session_state.supabase_client
-
-# Sidebar Stats
-try:
-    if client:
-        active_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Active'})
-        today_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Completed'})
-        today_gaming = today_df['total'].sum()
-        
-        with st.sidebar:
-            st.metric("👥 Live Sessions", len(active_df))
-            st.metric("💰 Gaming Today", f"₹{today_gaming:.0f}")
-            pending_fnb = active_df['fnb_total'].sum()
-            st.metric("🍔 Pending F&B", f"₹{pending_fnb:.0f}")
-except:
-    st.sidebar.info("📊 Stats loading...")
-
-tab1, tab2, tab3, tab4 = st.tabs(["🖥️ Active Floor", "📅 Bookings", "🍔 Cafe POS", "💰 Dashboard"])
-
-# === TAB 1: Active Floor ===
-with tab1:
-    active_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Active'})
-    st.session_state.active_sales = active_df
-    
-    if not active_df.empty:
-        for idx, row in active_df.iterrows():
-            remaining = calculate_remaining_time(row['entry_time'], row['duration'])
-            is_overdue = remaining <= 0
+    with col_manage:
+        st.markdown(f"<div class='ga-card' style='border-color:{ga_colors['ice_blue']}'>", unsafe_allow_html=True)
+        st.markdown("<p class='card-title'>Quick Actions</p>", unsafe_allow_html=True)
+        if not active_df.empty:
+            active_df['lbl'] = active_df['customer'] + " | " + active_df['system']
+            sel = st.selectbox("Select Player", active_df['lbl'].tolist())
+            p_row = active_df[active_df['lbl'] == sel].iloc[0]
             
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric(row['customer'], f"{row['system']}", 
-                         delta=f"{remaining:.1f}h", 
-                         delta_color="inverse" if is_overdue else "normal")
-            with col2: st.metric("Gaming", f"₹{row['total']:.0f}")
-            with col3: st.metric("F&B", f"₹{row['fnb_total']:.0f}")
-            with col4:
-                if st.button("🛒 Checkout", key=f"chk_{row['id']}_{st.session_state.form_reset}"):
-                    with st.container():
-                        st.subheader(f"Checkout: {row['customer']}")
-                        hrs = st.number_input("Hours", value=float(row['duration']), 
-                                            key=f"hrs_{row['id']}")
-                        gaming_total = calculate_gaming_price(row['system'], hrs)
-                        fnb_total = float(row['fnb_total'])
-                        grand_total = gaming_total + fnb_total
-                        
-                        st.metric("Grand Total", f"₹{grand_total:.0f}")
-                        method = st.selectbox("Method", ['Cash', 'UPI'])
-                        
-                        if st.button("Complete", key=f"comp_{row['id']}_{st.session_state.form_reset}"):
-                            update_data = {
-                                'duration': hrs,
-                                'total': gaming_total,
-                                'method': method,
-                                'status': 'Completed'
-                            }
-                            if client.table('sales').update(update_data).eq('id', row['id']).execute():
-                                st.session_state.form_reset += 1
-                                st.rerun()
-    else:
-        st.balloons()
-        st.success("🎉 Floor is clear!")
-
-# === TAB 2: Bookings ===
-with tab2:
-    with st.form("booking"):
-        col1, col2, col3, col4 = st.columns(4)
-        customer = col1.text_input("Name")
-        phone = col2.text_input("Phone")
-        date = col3.date_input("Date", value=now.date())
-        time_str = col4.time_input("Time", value=now.time()).strftime("%I:%M %p")
-        
-        st.subheader("Cart")
-        sys = st.selectbox("System", list(GAMING_PRICES.keys()))
-        dur = st.selectbox("Hours", [0.5, 1, 1.5, 2])
-        price = calculate_gaming_price(sys, dur)
-        st.info(f"₹{price}")
-        
-        if st.button("Add"):
-            st.session_state.cart.append({'sys': sys, 'dur': dur, 'price': price})
-            st.rerun()
-        
-        if st.session_state.cart:
-            df = pd.DataFrame(st.session_state.cart)
-            st.dataframe(df)
-            if st.form_submit_button("Start Session"):
-                for item in st.session_state.cart:
-                    data = {
-                        'date': get_now_datetime(),
-                        'scheduled_date': str(date),
-                        'entry_time': time_str,
-                        'customer': customer,
-                        'phone': phone,
-                        'system': item['sys'],
-                        'duration': item['dur'],
-                        'total': item['price'],
-                        'fnb_items': '',
-                        'fnb_total': 0.0,
-                        'status': 'Active'
-                    }
-                    client.table('sales').insert(data).execute()
-                st.session_state.cart = []
-                st.success("✅ Started!")
-                st.rerun()
-
-# === TAB 3: Cafe POS ===
-with tab3:
-    if st.session_state.cafe_cart:
-        df = pd.DataFrame(st.session_state.cafe_cart)
-        st.dataframe(df)
-        st.metric("Total", f"₹{df['sell'].sum():.0f}")
-    
-    cols = st.columns(3)
-    idx = 0
-    for cat, items in CAFE_MENU.items():
-        with cols[idx % 3]:
-            st.subheader(cat[:10])
-            for name, prices in list(items.items())[:3]:
-                if st.button(f"{name[:12]}\n₹{prices['sell']}", key=f"{name}_{st.session_state.form_reset}"):
-                    st.session_state.cafe_cart.append({
-                        'item': name, 'sell': prices['sell'], 'cost': prices['cost']
-                    })
+            act = st.radio("Action", ["Extend Time", "Add Food", "Checkout"], horizontal=True)
+            
+            if act == "Extend Time":
+                hrs = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, 0.5)
+                if st.button("Confirm Extension"):
+                    new_total = p_row['total'] + get_price(SYSTEMS[p_row['system']], hrs)
+                    conn.table("sales").update({"total": new_total, "duration": p_row['duration'] + hrs}).eq("id", int(p_row['id'])).execute()
                     st.rerun()
-            idx += 1
-    
-    # Process order
-    customers = ['Walk-in'] + st.session_state.active_sales['customer'].tolist()
-    customer = st.selectbox("Customer", customers, key=f"cust_{st.session_state.form_reset}")
-    
-    if st.session_state.cafe_cart and st.button("Process Order"):
-        cart_df = pd.DataFrame(st.session_state.cafe_cart)
-        total_rev = cart_df['sell'].sum()
-        total_cost = cart_df['cost'].sum()
-        profit = total_rev - total_cost
-        
-        # Log to cafe_orders
-        order_data = {
-            'date': get_today_date(),
-            'time': get_time_12hr(),
-            'customer': customer,
-            'items': json.dumps(cart_df['item'].tolist()),
-            'total_revenue': total_rev,
-            'total_cost': total_cost,
-            'profit': profit,
-            'method': 'POS'
-        }
-        client.table('cafe_orders').insert(order_data).execute()
-        
-        # Update gamer tab if applicable
-        if customer != 'Walk-in' and customer in st.session_state.active_sales['customer'].values:
-            gamer_row = st.session_state.active_sales[st.session_state.active_sales['customer'] == customer].iloc[0]
-            client.table('sales').update({
-                'fnb_total': float(gamer_row['fnb_total']) + total_rev,
-                'fnb_items': json.dumps(cart_df['item'].tolist())
-            }).eq('id', gamer_row['id']).execute()
-        
-        st.session_state.cafe_cart = []
-        st.success("✅ Order processed!")
-        st.rerun()
+            
+            elif act == "Add Food":
+                f_sel = st.selectbox("Menu", FLAT_MENU)
+                f_name, f_price = (st.text_input("Item"), st.number_input("Price", 0)) if f_sel == "Custom Item..." else (f_sel.split(" - ")[0], int(f_sel.split("₹")[1]))
+                if st.button("Add to Tab"):
+                    cur_f = str(p_row.get('fnb_items') or "")
+                    new_f = f"{cur_f} | {f_name}" if cur_f else f_name
+                    conn.table("sales").update({"fnb_items": new_f, "fnb_total": (p_row.get('fnb_total') or 0) + f_price}).eq("id", int(p_row['id'])).execute()
+                    st.rerun()
 
-# === TAB 4: Dashboard ===
-with tab4:
-    if st.text_input("Passcode", type="password") == "Admin@2026":
-        # Today's stats
-        today_sales = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Completed'})
-        today_cafe = df_from_supabase(client, 'cafe_orders')
-        today_exp = df_from_supabase(client, 'expenses')
+            elif act == "Checkout":
+                g_total = p_row['total'] + (p_row.get('fnb_total') or 0)
+                st.success(f"### Collect: ₹{g_total:.0f}")
+                meth = st.radio("Method", ["Cash", "UPI"], horizontal=True)
+                if st.button("Complete & Close"):
+                    conn.table("sales").update({"status": "Completed", "method": meth, "total": float(g_total)}).eq("id", int(p_row['id'])).execute()
+                    st.balloons(); st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# ==========================================
+# TAB 3: SNAPSHOT (ICE BLUE CHARTS)
+# ==========================================
+with t3:
+    st.subheader("Daily Revenue Dashboard")
+    try:
+        raw = conn.table("sales").select("*").execute()
+        df = pd.DataFrame(raw.data)
+        today = datetime.now(IST).strftime('%Y-%m-%d')
+        df['date_str'] = df['date'].str[:10]
+        t_df = df[df['date_str'] == today]
+        comp = t_df[t_df['status'] == 'Completed']
         
-        gaming_rev = today_sales['total'].sum()
-        cafe_profit = today_cafe['profit'].sum()
-        vendor_owed = today_cafe['total_cost'].sum()
-        expenses = today_exp['amount'].sum()
-        net_profit = gaming_rev + cafe_profit - expenses
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"<div class='ga-card'><p class='card-subtitle'>Cash Income</p><p class='card-metric'>₹{comp[comp['method']=='Cash']['total'].sum():,.0f}</p></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='ga-card'><p class='card-subtitle'>UPI Income</p><p class='card-metric'>₹{comp[comp['method']!='Cash']['total'].sum():,.0f}</p></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='ga-card' style='border-color:{ga_colors['ice_blue']}'><p class='card-subtitle'>Grand Total</p><p class='card-metric'>₹{comp['total'].sum():,.0f}</p></div>", unsafe_allow_html=True)
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("🎮 Gaming", f"₹{gaming_rev:.0f}")
-        col2.metric("🍔 Cafe Profit", f"₹{cafe_profit:.0f}")
-        col3.metric("💸 Vendor Owed", f"₹{vendor_owed:.0f}")
-        col4.metric("💰 Net Profit", f"₹{net_profit:.0f}", delta_color="normal")
-        
-        st.dataframe(today_cafe)
-    else:
-        st.info("🔐 Enter passcode: **Admin@2026**")
+        st.write("### Weekly Growth")
+        if not comp.empty:
+            # Ice Blue Chart
+            chart_data = df[df['status']=='Completed'].groupby('date_str')['total'].sum().reset_index().tail(7)
+            fig = px.bar(chart_data, x='date_str', y='total', color_discrete_sequence=[ga_colors['ice_blue']])
+            fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color=ga_colors['text'], height=300)
+            st.plotly_chart(fig, use_container_width=True)
+    except: pass
+
+# ==========================================
+# TAB 2: BOOKINGS (STABLE)
+# ==========================================
+with t2:
+    col_f, col_c = st.columns([1, 1])
+    with col_f:
+        st.subheader("New Session")
+        with st.container(border=True):
+            name = st.text_input("Name", key=f"n_{st.session_state.form_reset}")
+            b_type = st.radio("Type", ["Walk-in", "Booking"], horizontal=True)
+            sys = st.selectbox("System", list(SYSTEMS.keys()))
+            dur = st.number_input("Hours", 0.5, 12.0, 1.0, 0.5)
+            if st.button("Add to Cart"):
+                st.session_state.cart.append({"sys": sys, "dur": dur, "price": get_price(SYSTEMS[sys], dur)})
+                st.rerun()
+    with col_c:
+        st.subheader("Cart")
+        if st.session_state.cart:
+            for i, item in enumerate(st.session_state.cart):
+                st.write(f"🎮 {item['sys']} ({item['dur']}h) - ₹{item['price']}")
+            if st.button("🚀 Start Sessions"):
+                for item in st.session_state.cart:
+                    conn.table("sales").insert({"customer": name, "system": item['sys'], "duration": item['dur'], "total": item['price'], "status": "Active" if b_type=="Walk-in" else "Booked", "date": datetime.now(IST).isoformat(), "scheduled_date": datetime.now(IST).strftime('%Y-%m-%d')}).execute()
+                st.session_state.cart = []; st.session_state.form_reset += 1; st.rerun()
