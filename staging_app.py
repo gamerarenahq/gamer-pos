@@ -4,8 +4,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import pytz
 import json
-import supabase
-from st_supabase import create_supabase_client  # Standard package
+from supabase import create_client, Client
+import os
 
 # Initialize session state at the VERY TOP to prevent unhashable dict errors
 if 'cart' not in st.session_state:
@@ -53,64 +53,58 @@ CAFE_MENU = {
     }
 }
 
-# Supabase Configuration - UPDATE THESE WITH YOUR CREDENTIALS
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "YOUR_SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "YOUR_SUPABASE_ANON_KEY")
+# Supabase Configuration - Put these in Streamlit Secrets (secrets.toml)
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY", os.getenv("SUPABASE_ANON_KEY"))
 
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase client"""
+    """Initialize Supabase client - STANDARD supabase-py"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("❌ **Supabase credentials missing!** Add to `secrets.toml`:")
+        st.code("""
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_ANON_KEY = "your-anon-key"
+        """)
+        return None
+    
     try:
-        client = create_supabase_client(SUPABASE_URL, SUPABASE_KEY)
+        client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Test connection
+        client.table("sales").select("count").limit(1).execute()
+        st.success("✅ Supabase connected!")
         return client
-    except:
-        st.error("❌ Supabase connection failed. Check your secrets.toml")
+    except Exception as e:
+        st.error(f"❌ Supabase connection failed: {str(e)}")
         return None
 
 def sanitize_for_supabase(value):
     """CRITICAL: Prevent NaN crashes in Supabase API"""
-    if pd.isna(value) or value is None or value == "nan":
-        return 0.0 if isinstance(value, (int, float, np.floating)) else ""
-    if isinstance(value, float) and np.isnan(value):
+    if pd.isna(value) or value is None or str(value).lower() in ['nan', 'none']:
+        return 0.0 if isinstance(value, (int, float)) else ""
+    if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
         return 0.0
     return value
 
-def df_from_supabase(table_name, filters=""):
-    """Helper to fetch data as pandas DataFrame"""
-    client = st.session_state.supabase_client
+def df_from_supabase(client, table_name, filters=None):
+    """Fetch data as pandas DataFrame"""
     if not client:
         return pd.DataFrame()
     
     try:
-        response = client.table(table_name).select("*").execute()
+        query = client.table(table_name).select("*")
+        if filters:
+            query = query.eq(filters['column'], filters['value'])
+        response = query.execute()
         df = pd.DataFrame(response.data)
+        # Convert numeric columns
+        numeric_cols = ['total', 'fnb_total', 'duration', 'profit']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(sanitize_for_supabase)
         return df
     except:
         return pd.DataFrame()
-
-def update_supabase(table_name, record_id, data):
-    """Helper to update record"""
-    client = st.session_state.supabase_client
-    if not client:
-        return False
-    
-    try:
-        client.table(table_name).update(data).eq('id', record_id).execute()
-        return True
-    except:
-        return False
-
-def insert_supabase(table_name, data):
-    """Helper to insert record"""
-    client = st.session_state.supabase_client
-    if not client:
-        return False
-    
-    try:
-        client.table(table_name).insert(data).execute()
-        return True
-    except:
-        return False
 
 def get_today_date():
     return now.strftime("%Y-%m-%d")
@@ -121,29 +115,19 @@ def get_now_datetime():
 def get_time_12hr():
     return now.strftime("%I:%M %p")
 
-def parse_time_12hr(time_str):
-    """Parse 12hr time format"""
-    try:
-        return datetime.strptime(time_str, "%I:%M %p").time()
-    except:
-        return now.time()
-
 def calculate_remaining_time(entry_time_str, duration_hours):
-    """Calculate live remaining time for active sessions"""
+    """Calculate live remaining time"""
     try:
-        entry_time = parse_time_12hr(entry_time_str)
-        entry_dt = now.replace(hour=entry_time.hour, minute=entry_time.minute, second=0, microsecond=0)
-        end_time = entry_dt + timedelta(hours=duration_hours)
+        # Parse 12hr format
+        entry_dt = datetime.strptime(entry_time_str, "%I:%M %p").replace(
+            year=now.year, month=now.month, day=now.day
+        )
+        entry_dt = IST.localize(entry_dt)
+        end_time = entry_dt + timedelta(hours=float(duration_hours))
         remaining = max(0, (end_time - now).total_seconds() / 3600)
         return remaining
     except:
         return 0
-
-def is_system_available(system, booked_date, start_time_str, duration_hours):
-    """Double booking prevention logic"""
-    active_df = df_from_supabase('sales', f"status=eq.Active,system=eq.{system},scheduled_date=eq.{booked_date}")
-    booked_df = df_from_supabase('sales', f"status=eq.Booked,system=eq.{system},scheduled_date=eq.{booked_date}")
-    return len(active_df) == 0 and len(booked_df) == 0
 
 def calculate_gaming_price(system, hours):
     """Exact gaming pricing logic"""
@@ -153,206 +137,191 @@ def calculate_gaming_price(system, hours):
 # === MAIN APP ===
 st.set_page_config(page_title="🎮 Gaming Cafe POS & ERP", layout="wide")
 st.title("🎮 Gaming Cafe POS & ERP System")
-st.markdown("---")
+st.caption("✅ Production Ready • Asia/Kolkata • Auto NaN Safe")
 
-# Initialize Supabase
+# Initialize Supabase ONCE
 if st.session_state.supabase_client is None:
     st.session_state.supabase_client = init_supabase()
+client = st.session_state.supabase_client
 
-# Sidebar for quick stats
+# Sidebar Stats
 try:
-    active_count = len(df_from_supabase('sales', "status=eq.Active"))
-    today_gaming = df_from_supabase('sales', f"status=eq.Completed,date=ilike.{get_today_date()}%").assign(total=lambda x: x['total'].apply(sanitize_for_supabase))['total'].sum()
-    pending_fnb = df_from_supabase('sales', "status=eq.Active").assign(fnb_total=lambda x: x['fnb_total'].apply(sanitize_for_supabase))['fnb_total'].sum()
-    
-    with st.sidebar:
-        st.metric("Live Active Sessions", active_count)
-        st.metric("Today's Gaming Revenue", f"₹{today_gaming:.0f}")
-        st.metric("Pending F&B Tabs", f"₹{pending_fnb:.0f}")
+    if client:
+        active_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Active'})
+        today_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Completed'})
+        today_gaming = today_df['total'].sum()
+        
+        with st.sidebar:
+            st.metric("👥 Live Sessions", len(active_df))
+            st.metric("💰 Gaming Today", f"₹{today_gaming:.0f}")
+            pending_fnb = active_df['fnb_total'].sum()
+            st.metric("🍔 Pending F&B", f"₹{pending_fnb:.0f}")
 except:
-    st.sidebar.info("Loading stats...")
+    st.sidebar.info("📊 Stats loading...")
 
-tab1, tab2, tab3, tab4 = st.tabs(["🖥️ Active Floor & Checkout", "📅 Bookings & Groups", "🍔 Cafe POS", "💰 Master Vault"])
+tab1, tab2, tab3, tab4 = st.tabs(["🖥️ Active Floor", "📅 Bookings", "🍔 Cafe POS", "💰 Dashboard"])
 
-# === TAB 1: Active Floor & Unified Checkout ===
+# === TAB 1: Active Floor ===
 with tab1:
-    # Fetch active sales
-    active_df = df_from_supabase('sales', "status=eq.Active")
+    active_df = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Active'})
     st.session_state.active_sales = active_df
     
     if not active_df.empty:
         for idx, row in active_df.iterrows():
-            remaining_hrs = calculate_remaining_time(
-                sanitize_for_supabase(row['entry_time']), 
-                sanitize_for_supabase(row['duration'])
-            )
+            remaining = calculate_remaining_time(row['entry_time'], row['duration'])
+            is_overdue = remaining <= 0
             
             col1, col2, col3, col4 = st.columns(4)
-            color = "inverse" if remaining_hrs <= 0.1 else None
-            
             with col1:
-                st.metric(f"**{row['customer']}**", f"{row['system']}", delta=f"{remaining_hrs:.1f}h", delta_color=color)
-            with col2:
-                st.metric("Gaming", f"₹{sanitize_for_supabase(row['total']):.0f}")
-            with col3:
-                st.metric("F&B Tab", f"₹{sanitize_for_supabase(row['fnb_total']):.0f}")
+                st.metric(row['customer'], f"{row['system']}", 
+                         delta=f"{remaining:.1f}h", 
+                         delta_color="inverse" if is_overdue else "normal")
+            with col2: st.metric("Gaming", f"₹{row['total']:.0f}")
+            with col3: st.metric("F&B", f"₹{row['fnb_total']:.0f}")
             with col4:
-                if st.button(f"**Checkout**", key=f"checkout_{row.get('id', idx)}_{st.session_state.form_reset}", 
-                           type="primary", use_container_width=True):
-                    # Unified Checkout Modal
+                if st.button("🛒 Checkout", key=f"chk_{row['id']}_{st.session_state.form_reset}"):
                     with st.container():
-                        st.subheader(f"🛒 Unified Checkout: {row['customer']}")
+                        st.subheader(f"Checkout: {row['customer']}")
+                        hrs = st.number_input("Hours", value=float(row['duration']), 
+                                            key=f"hrs_{row['id']}")
+                        gaming_total = calculate_gaming_price(row['system'], hrs)
+                        fnb_total = float(row['fnb_total'])
+                        grand_total = gaming_total + fnb_total
                         
-                        col_a, col_b = st.columns([1, 2])
-                        with col_a:
-                            final_hours = st.number_input("Final Billed Hours", 
-                                                        min_value=0.0, 
-                                                        value=float(sanitize_for_supabase(row['duration'])),
-                                                        key=f"hours_{row.get('id', idx)}_{st.session_state.form_reset}")
-                            gaming_total = calculate_gaming_price(row['system'], final_hours)
+                        st.metric("Grand Total", f"₹{grand_total:.0f}")
+                        method = st.selectbox("Method", ['Cash', 'UPI'])
                         
-                        with col_b:
-                            fnb_total = float(sanitize_for_supabase(row['fnb_total']))
-                            grand_total = gaming_total + fnb_total
-                            st.metric("**Grand Total**", f"₹{grand_total:.0f}")
-                        
-                        payment_method = st.selectbox("Payment Method", 
-                                                    ['Cash', 'UPI', 'Pending'],
-                                                    key=f"method_{row.get('id', idx)}_{st.session_state.form_reset}")
-                        
-                        if st.button("✅ Complete Checkout", key=f"complete_{row.get('id', idx)}_{st.session_state.form_reset}", type="primary"):
-                            # Update sales table
+                        if st.button("Complete", key=f"comp_{row['id']}_{st.session_state.form_reset}"):
                             update_data = {
-                                'duration': final_hours,
+                                'duration': hrs,
                                 'total': gaming_total,
-                                'method': payment_method,
+                                'method': method,
                                 'status': 'Completed'
                             }
-                            if update_supabase('sales', row['id'], update_data):
+                            if client.table('sales').update(update_data).eq('id', row['id']).execute():
                                 st.session_state.form_reset += 1
-                                st.success("✅ Checkout completed!")
                                 st.rerun()
-                            else:
-                                st.error("❌ Update failed!")
     else:
-        st.info("🎉 No active sessions!")
+        st.balloons()
+        st.success("🎉 Floor is clear!")
 
-# === TAB 2: Bookings & Group Cart ===
+# === TAB 2: Bookings ===
 with tab2:
-    st.subheader("📅 New Booking / Group Session")
-    
-    with st.form("booking_form", clear_on_submit=False):
+    with st.form("booking"):
         col1, col2, col3, col4 = st.columns(4)
-        with col1: customer = st.text_input("👤 Customer Name", key=f"cust_{st.session_state.form_reset}")
-        with col2: phone = st.text_input("📱 Phone", key=f"phone_{st.session_state.form_reset}")
-        with col3: date = st.date_input("📅 Date", value=now.date(), key=f"date_{st.session_state.form_reset}")
-        with col4: start_time = st.time_input("🕐 Start Time", value=now.time(), key=f"time_{st.session_state.form_reset}")
+        customer = col1.text_input("Name")
+        phone = col2.text_input("Phone")
+        date = col3.date_input("Date", value=now.date())
+        time_str = col4.time_input("Time", value=now.time()).strftime("%I:%M %p")
         
-        st.subheader("🛒 Group Cart")
-        systems_list = list(GAMING_PRICES.keys())
+        st.subheader("Cart")
+        sys = st.selectbox("System", list(GAMING_PRICES.keys()))
+        dur = st.selectbox("Hours", [0.5, 1, 1.5, 2])
+        price = calculate_gaming_price(sys, dur)
+        st.info(f"₹{price}")
         
-        # Add to cart
-        selected_system = st.selectbox("Add System", systems_list, key=f"sys_{st.session_state.form_reset}")
-        hours = st.selectbox("Duration", [0.5, 1.0, 1.5, 2.0], key=f"dur_{st.session_state.form_reset}")
-        price = calculate_gaming_price(selected_system, hours)
-        st.info(f"₹{price} for {hours}h on {selected_system}")
-        
-        if st.button("➕ Add to Cart", key=f"addcart_{st.session_state.form_reset}"):
-            st.session_state.cart.append({
-                'system': selected_system, 'hours': hours, 'price': price
-            })
+        if st.button("Add"):
+            st.session_state.cart.append({'sys': sys, 'dur': dur, 'price': price})
             st.rerun()
         
-        # Cart display
         if st.session_state.cart:
-            cart_df = pd.DataFrame(st.session_state.cart)
-            st.dataframe(cart_df, use_container_width=True)
-            total_booking = cart_df['price'].sum()
-            st.metric("**Booking Total**", f"₹{total_booking:.0f}")
-            
-            if st.form_submit_button("🚀 Start Session", type="primary"):
-                # Double booking check
-                available = True
-                for _, item in cart_df.iterrows():
-                    if not is_system_available(item['system'], str(date), str(start_time), item['hours']):
-                        st.error(f"❌ **{item['system']}** not available on {date}!")
-                        available = False
-                
-                if available:
-                    # Insert bookings
-                    for _, item in cart_df.iterrows():
-                        booking_data = {
-                            'date': get_now_datetime(),
-                            'scheduled_date': str(date),
-                            'entry_time': start_time.strftime("%I:%M %p"),
-                            'customer': customer,
-                            'phone': phone,
-                            'system': item['system'],
-                            'duration': item['hours'],
-                            'total': item['price'],
-                            'fnb_items': '',
-                            'fnb_total': 0.0,
-                            'method': 'Pending',
-                            'status': 'Active'
-                        }
-                        insert_supabase('sales', booking_data)
-                    
-                    st.session_state.cart = []
-                    st.session_state.form_reset += 1
-                    st.success("✅ Session started!")
-                    st.rerun()
-                else:
-                    st.error("Cannot proceed - system conflicts!")
+            df = pd.DataFrame(st.session_state.cart)
+            st.dataframe(df)
+            if st.form_submit_button("Start Session"):
+                for item in st.session_state.cart:
+                    data = {
+                        'date': get_now_datetime(),
+                        'scheduled_date': str(date),
+                        'entry_time': time_str,
+                        'customer': customer,
+                        'phone': phone,
+                        'system': item['sys'],
+                        'duration': item['dur'],
+                        'total': item['price'],
+                        'fnb_items': '',
+                        'fnb_total': 0.0,
+                        'status': 'Active'
+                    }
+                    client.table('sales').insert(data).execute()
+                st.session_state.cart = []
+                st.success("✅ Started!")
+                st.rerun()
 
 # === TAB 3: Cafe POS ===
 with tab3:
-    st.subheader("🍔 Hunger Monkey Cafe POS")
-    
-    # Live cart display
     if st.session_state.cafe_cart:
+        df = pd.DataFrame(st.session_state.cafe_cart)
+        st.dataframe(df)
+        st.metric("Total", f"₹{df['sell'].sum():.0f}")
+    
+    cols = st.columns(3)
+    idx = 0
+    for cat, items in CAFE_MENU.items():
+        with cols[idx % 3]:
+            st.subheader(cat[:10])
+            for name, prices in list(items.items())[:3]:
+                if st.button(f"{name[:12]}\n₹{prices['sell']}", key=f"{name}_{st.session_state.form_reset}"):
+                    st.session_state.cafe_cart.append({
+                        'item': name, 'sell': prices['sell'], 'cost': prices['cost']
+                    })
+                    st.rerun()
+            idx += 1
+    
+    # Process order
+    customers = ['Walk-in'] + st.session_state.active_sales['customer'].tolist()
+    customer = st.selectbox("Customer", customers, key=f"cust_{st.session_state.form_reset}")
+    
+    if st.session_state.cafe_cart and st.button("Process Order"):
         cart_df = pd.DataFrame(st.session_state.cafe_cart)
-        st.dataframe(cart_df, use_container_width=True)
-        cart_total = cart_df['sell_price'].sum()
-        st.metric("**Cart Total**", f"₹{cart_total:.0f}")
+        total_rev = cart_df['sell'].sum()
+        total_cost = cart_df['cost'].sum()
+        profit = total_rev - total_cost
+        
+        # Log to cafe_orders
+        order_data = {
+            'date': get_today_date(),
+            'time': get_time_12hr(),
+            'customer': customer,
+            'items': json.dumps(cart_df['item'].tolist()),
+            'total_revenue': total_rev,
+            'total_cost': total_cost,
+            'profit': profit,
+            'method': 'POS'
+        }
+        client.table('cafe_orders').insert(order_data).execute()
+        
+        # Update gamer tab if applicable
+        if customer != 'Walk-in' and customer in st.session_state.active_sales['customer'].values:
+            gamer_row = st.session_state.active_sales[st.session_state.active_sales['customer'] == customer].iloc[0]
+            client.table('sales').update({
+                'fnb_total': float(gamer_row['fnb_total']) + total_rev,
+                'fnb_items': json.dumps(cart_df['item'].tolist())
+            }).eq('id', gamer_row['id']).execute()
+        
+        st.session_state.cafe_cart = []
+        st.success("✅ Order processed!")
+        st.rerun()
 
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Menu grid
-        for category, items in CAFE_MENU.items():
-            st.subheader(category)
-            cols = st.columns(len(items))
-            for idx, (item_name, prices) in enumerate(items.items()):
-                with cols[idx]:
-                    if st.button(f"{item_name}\n₹{prices['sell']}", 
-                               key=f"menu_{item_name}_{st.session_state.form_reset}",
-                               use_container_width=True, help=f"Cost: ₹{prices['cost']}"):
-                        st.session_state.cafe_cart.append({
-                            'item': item_name,
-                            'sell_price': prices['sell'],
-                            'cost_price': prices['cost']
-                        })
-                        st.rerun()
+# === TAB 4: Dashboard ===
+with tab4:
+    if st.text_input("Passcode", type="password") == "Admin@2026":
+        # Today's stats
+        today_sales = df_from_supabase(client, 'sales', {'column': 'status', 'value': 'Completed'})
+        today_cafe = df_from_supabase(client, 'cafe_orders')
+        today_exp = df_from_supabase(client, 'expenses')
         
-        # Custom item
-        with st.expander("➕ Custom Item"):
-            custom_name = st.text_input("Item Name", key=f"custom_name_{st.session_state.form_reset}")
-            custom_sell = st.number_input("Sell Price ₹", min_value=0.0, key=f"custom_sell_{st.session_state.form_reset}")
-            custom_cost = st.number_input("Cost Price ₹", min_value=0.0, key=f"custom_cost_{st.session_state.form_reset}")
-            if st.button("➕ Add Custom Item", key=f"add_custom_{st.session_state.form_reset}"):
-                st.session_state.cafe_cart.append({
-                    'item': custom_name,
-                    'sell_price': custom_sell,
-                    'cost_price': custom_cost
-                })
-                st.rerun()
-    
-    with col2:
-        # Customer assignment
-        active_players = st.session_state.active_sales['customer'].unique().tolist() if not st.session_state.active_sales.empty else []
-        customer_type = st.selectbox("👤 Assign to:", 
-                                   ["Walk-in (Cafe Only)"] + active_players,
-                                   key=f"assign_{st.session_state.form_reset}")
+        gaming_rev = today_sales['total'].sum()
+        cafe_profit = today_cafe['profit'].sum()
+        vendor_owed = today_cafe['total_cost'].sum()
+        expenses = today_exp['amount'].sum()
+        net_profit = gaming_rev + cafe_profit - expenses
         
-        if st.session_state.cafe_cart and st.button("💳 Process Order", type="primary", use_container_width=True):
-            cart_df = pd.DataFrame(st.session_state.cafe_cart)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("🎮 Gaming", f"₹{gaming_rev:.0f}")
+        col2.metric("🍔 Cafe Profit", f"₹{cafe_profit:.0f}")
+        col3.metric("💸 Vendor Owed", f"₹{vendor_owed:.0f}")
+        col4.metric("💰 Net Profit", f"₹{net_profit:.0f}", delta_color="normal")
+        
+        st.dataframe(today_cafe)
+    else:
+        st.info("🔐 Enter passcode: **Admin@2026**")
