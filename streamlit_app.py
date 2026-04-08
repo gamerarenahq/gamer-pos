@@ -20,7 +20,7 @@ st.markdown("""
     .crm-card { background-color: #1A1F2B; padding: 20px; border-radius: 12px; border-left: 4px solid #98DED9; margin-bottom: 12px; }
     .warning-card { background-color: #1A1F2B; padding: 20px; border-radius: 12px; border-left: 4px solid #FF754C; margin-bottom: 12px; }
     .overdue-card { background-color: #2D1E1E; padding: 20px; border-radius: 12px; border-left: 4px solid #EF4444; margin-bottom: 12px; }
-    .metric-box { background-color: #1A1F2B; padding: 20px; border-radius: 12px; text-align: center; border-top: 3px solid #98DED9; }
+    .metric-box { background-color: #1A1F2B; padding: 20px; border-radius: 12px; text-align: center; border-top: 3px solid #98DED9; margin-bottom: 15px; }
     .panel-box { background: #1A1F2B; padding: 20px; border-radius: 16px; border: 1px solid #2D3446; }
     .menu-btn>button { background: #161922; border: 1px solid #2D3446; height: 70px; border-radius: 10px; }
     .menu-btn>button:hover { border-color: #98DED9; color: #98DED9 !important; }
@@ -281,20 +281,15 @@ with t3:
             
             if "Walk-in" in b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                
-                # FIX: Added specific Time Picker just for Walk-ins
                 b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"w_t_{st.session_state.form_reset}")
                 time_str = b_time.strftime("%I:%M %p")
-                
                 final_status = "Active"; btn_txt = "🚀 Start Session Now"
                 st.info(f"Session will be logged for today at {time_str}")
             else:
                 d_col, t_col = st.columns(2)
                 b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"d_{st.session_state.form_reset}")
-                
                 def_time = (datetime.now(IST) + timedelta(hours=1)).replace(minute=0, second=0).time()
                 b_time = t_col.time_input("Select Time", value=def_time, step=900, key=f"t_{st.session_state.form_reset}")
-                
                 sch_date = b_date.strftime('%Y-%m-%d')
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"; btn_txt = f"📅 Confirm Reservation"
@@ -423,6 +418,51 @@ with t5:
 
             st.divider()
             
+            if not vdf.empty:
+                vdf['date_str'] = vdf['date'].str[:10]
+                comp_df = vdf[vdf['status'] == 'Completed'].copy()
+                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
+
+                # Date calculations
+                now_d = datetime.now(IST).date()
+                start_tw = now_d - timedelta(days=now_d.weekday())
+                start_lw = start_tw - timedelta(days=7)
+                end_lw = start_tw - timedelta(days=1)
+                
+                start_tm = now_d.replace(day=1)
+                end_lm = start_tm - timedelta(days=1)
+                start_lm = end_lm.replace(day=1)
+
+                # Revenue aggregations
+                wtd = comp_df[comp_df['date_obj'].dt.date >= start_tw]['total'].sum()
+                lw = comp_df[(comp_df['date_obj'].dt.date >= start_lw) & (comp_df['date_obj'].dt.date <= end_lw)]['total'].sum()
+                mtd = comp_df[comp_df['date_obj'].dt.date >= start_tm]['total'].sum()
+                lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)]['total'].sum()
+                lifetime = comp_df['total'].sum()
+
+                st.write("### 📈 Executive Revenue Dashboard")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Lifetime Gross", f"₹{lifetime:,.0f}")
+                c2.metric("This Month (MTD)", f"₹{mtd:,.0f}", delta=f"{((mtd-lm)/lm*100) if lm else 0:.1f}% vs Last Month")
+                c3.metric("Last Month", f"₹{lm:,.0f}")
+                c4.metric("This Week (WTD)", f"₹{wtd:,.0f}", delta=f"{((wtd-lw)/lw*100) if lw else 0:.1f}% vs Last Week")
+                c5.metric("Last Week", f"₹{lw:,.0f}")
+                
+                st.divider()
+                
+                st.write("### 🎮 Hardware Income Breakdown")
+                hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
+                comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
+                
+                hw_life = comp_df.groupby('Category')['total'].sum().rename('Lifetime Gross')
+                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['total'].sum().rename('This Month')
+                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['total'].sum().rename('Last Month')
+                
+                hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
+                st.dataframe(hw_summary, hide_index=True, use_container_width=True)
+
+            st.divider()
+
             st.write("### 🍔 F&B Financials")
             sales_res = conn.table("cafe_orders").select("*").execute()
             sdf = pd.DataFrame(sales_res.data)
@@ -434,9 +474,6 @@ with t5:
             st.divider()
 
             if not vdf.empty:
-                vdf['date_str'] = vdf['date'].str[:10]
-                comp_df = vdf[vdf['status'] == 'Completed'].copy()
-                
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
                 tot_inc = comp_df.groupby('date_str')['total'].sum().rename('Gross Income').reset_index()
                 
