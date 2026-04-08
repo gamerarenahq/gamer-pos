@@ -101,10 +101,11 @@ with t1:
         st.subheader("Operator Panel")
         if not active_gamers.empty:
             active_gamers['lbl'] = active_gamers['customer'] + " | " + active_gamers['system']
-            sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed")
+            # FIX: Added unique key "tab1_gamer"
+            sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab1_gamer")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             
-            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True)
+            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key="tab1_action")
             
             if op_mode == "Smart Checkout":
                 try: played_mins = int((datetime.now(IST) - pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)).total_seconds() / 60.0)
@@ -123,13 +124,13 @@ with t1:
                 
                 st.markdown(f"<div style='background:#161922; padding:10px; border-radius:8px;'><small>Gaming: ₹{game_bill:.0f}<br>F&B Tab: ₹{food_bill:.0f}</small><h3 style='color:#98DED9; margin:0;'>Total: ₹{grand_total:.0f}</h3></div><br>", unsafe_allow_html=True)
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True)
+                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key="tab1_pay")
                 if st.button("🛑 Collect & Close", type="primary"):
                     conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(grand_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
-                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5)
+                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key="tab1_ext")
                 if st.button("➕ Extend Session"):
                     new_dur = float(row['duration']) + float(ext)
                     new_total = float(row['total']) + float(get_price(SYSTEMS[row['system']], ext, 0))
@@ -191,7 +192,8 @@ with t2:
                 gamer_id = None
                 if assign == "Add to Active Gamer":
                     if not active_gamers.empty:
-                        sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed")
+                        # FIX: Added unique key "tab2_gamer"
+                        sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab2_gamer")
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 
@@ -247,7 +249,6 @@ with t2:
                 n_sell = st.number_input("Selling Price (₹)", 0.0)
                 n_qty = st.number_input("Starting Stock", 0)
                 if st.form_submit_button("Add to Database", use_container_width=True):
-                    # BULLETPROOF CHECK
                     if not n_name.strip():
                         st.error("⚠️ Please enter a name for the item.")
                     elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values:
