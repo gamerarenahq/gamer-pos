@@ -101,7 +101,6 @@ with t1:
         st.subheader("Operator Panel")
         if not active_gamers.empty:
             active_gamers['lbl'] = active_gamers['customer'] + " | " + active_gamers['system']
-            # FIX: Added unique key "tab1_gamer"
             sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab1_gamer")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             
@@ -192,7 +191,6 @@ with t2:
                 gamer_id = None
                 if assign == "Add to Active Gamer":
                     if not active_gamers.empty:
-                        # FIX: Added unique key "tab2_gamer"
                         sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab2_gamer")
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
@@ -279,25 +277,36 @@ with t3:
             name = st.text_input("Gamer / Group Name", key=f"name_{st.session_state.form_reset}")
             phone = st.text_input("Phone Number", key=f"phone_{st.session_state.form_reset}")
             st.write("---")
-            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "📅 Advance Booking"], horizontal=True, key=f"type_{st.session_state.form_reset}")
+            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "🕒 Book for Later (Advance)"], horizontal=True, key=f"type_{st.session_state.form_reset}")
             
             if "Walk-in" in b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                time_str = datetime.now(IST).strftime("%I:%M %p")
+                
+                # FIX: Added specific Time Picker just for Walk-ins
+                b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"w_t_{st.session_state.form_reset}")
+                time_str = b_time.strftime("%I:%M %p")
+                
                 final_status = "Active"; btn_txt = "🚀 Start Session Now"
+                st.info(f"Session will be logged for today at {time_str}")
             else:
-                b_date = st.date_input("Future Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date())
+                d_col, t_col = st.columns(2)
+                b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"d_{st.session_state.form_reset}")
+                
+                def_time = (datetime.now(IST) + timedelta(hours=1)).replace(minute=0, second=0).time()
+                b_time = t_col.time_input("Select Time", value=def_time, step=900, key=f"t_{st.session_state.form_reset}")
+                
                 sch_date = b_date.strftime('%Y-%m-%d')
-                b_time = st.time_input("Time", value=datetime.now(IST).time(), step=60)
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"; btn_txt = f"📅 Confirm Reservation"
+                st.info(f"Slot will be reserved for {b_date.strftime('%b %d')} at {time_str}")
 
         st.subheader("2. Add Hardware")
         with st.container(border=True):
             sys_col, dur_col, ctrl_col = st.columns([2, 1, 1])
             sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()), key=f"sys_{st.session_state.form_reset}")
             dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5, key=f"dur_{st.session_state.form_reset}")
-            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0) if "PS" in sel_sys else 0
+            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
+            
             if st.button("➕ Add to Cart", use_container_width=True):
                 st.session_state.cart.append({"system": sel_sys, "duration": dur, "ctrl": ctrl, "price": get_price(SYSTEMS[sel_sys], dur, ctrl)})
                 st.rerun()
@@ -338,16 +347,31 @@ with t3:
         else: st.info("Cart is empty.")
         st.markdown("</div>", unsafe_allow_html=True)
         
-        st.write("### 📅 Upcoming Bookings")
+        st.write("### 📅 Upcoming Bookings Queue")
         if not db_df.empty:
             up_df = db_df[db_df['status'] == 'Booked']
             if not up_df.empty:
-                st.dataframe(up_df[['scheduled_date', 'entry_time', 'customer', 'system', 'duration']], hide_index=True)
-                sel_edit = st.selectbox("Cancel Booking", up_df['customer'] + " | " + up_df['system'])
-                if st.button("🚫 Cancel Booking"):
-                    t_id = up_df[up_df['customer'] + " | " + up_df['system'] == sel_edit].iloc[0]['id']
-                    conn.table("sales").update({"status": "Cancelled"}).eq("id", int(t_id)).execute()
-                    st.rerun()
+                st.dataframe(up_df[['scheduled_date', 'entry_time', 'customer', 'system', 'duration']], hide_index=True, use_container_width=True)
+                
+                up_df['lbl'] = up_df['customer'] + " | " + up_df['system']
+                c_chk, c_can = st.columns(2)
+                
+                with c_chk:
+                    st.write("✅ **Check-In Gamer**")
+                    sel_chk = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="chk_sel", label_visibility="collapsed")
+                    if st.button("🚀 Start Session", use_container_width=True):
+                        t_id = up_df[up_df['lbl'] == sel_chk].iloc[0]['id']
+                        now_time = datetime.now(IST).strftime("%I:%M %p")
+                        conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", int(t_id)).execute()
+                        st.success("Checked in successfully!"); st.rerun()
+                
+                with c_can:
+                    st.write("🚫 **Cancel Booking**")
+                    sel_can = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="can_sel", label_visibility="collapsed")
+                    if st.button("Cancel Booking", type="primary", use_container_width=True):
+                        t_id = up_df[up_df['lbl'] == sel_can].iloc[0]['id']
+                        conn.table("sales").update({"status": "Cancelled"}).eq("id", int(t_id)).execute()
+                        st.warning("Booking Cancelled!"); st.rerun()
 
 # ==========================================
 # TAB 4: SNAPSHOT & REPORTS
