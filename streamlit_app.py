@@ -51,7 +51,6 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
-# Safe Data Fetching (Prevents empty dataframe errors)
 inv_cols = ["id", "item_name", "category", "cost_price", "selling_price", "stock_level"]
 db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "entry_time", "status", "scheduled_date", "fnb_total", "fnb_items", "date"]
 
@@ -149,7 +148,6 @@ with t2:
         with col_menu:
             if inv_df.empty: st.warning("Inventory is empty. Go to the Stock tab to add items.")
             else:
-                # Grouped Dropdowns safely extracting categories
                 cat_list = inv_df['category'].dropna().unique()
                 for cat in cat_list:
                     with st.expander(f"📌 {cat}", expanded=(cat in ['Burgers & Meals', 'Fries & Snacks'])):
@@ -221,24 +219,35 @@ with t2:
     with inv_tab:
         st.subheader("Manage Catalog & Stock")
         c1, c2 = st.columns(2, gap="large")
+        
         with c1:
             st.write("### 📥 Refill Existing Stock")
             if not inv_df.empty:
-                refill_item = st.selectbox("Select Item", inv_df['item_name'].tolist())
+                refill_item = st.selectbox("Select Item to Refill", inv_df['item_name'].tolist())
                 refill_qty = st.number_input("Quantity Arrived", 1, 500, 10)
-                if st.button("Update Stock Levels"):
+                if st.button("Update Stock Levels", use_container_width=True):
                     c_qty = inv_df[inv_df['item_name'] == refill_item].iloc[0]['stock_level']
                     conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
-                    st.success("Stock Updated!"); st.rerun()
+                    st.success(f"Added stock to {refill_item}!"); st.rerun()
+            
+            st.write("---")
+            st.write("### 🗑️ Delete Item")
+            if not inv_df.empty:
+                del_item = st.selectbox("Select Item to Delete", inv_df['item_name'].tolist())
+                if st.button("Delete from Database", type="primary", use_container_width=True):
+                    conn.table("inventory").delete().eq("item_name", del_item).execute()
+                    st.warning(f"Deleted {del_item} permanently!"); st.rerun()
+
         with c2:
-            st.write("### ➕ Add New Item (In-House / Cold Drinks)")
+            st.write("### ➕ Add New Item")
             with st.form("new_inv"):
                 n_name = st.text_input("Name (e.g., Red Bull, Snickers)")
-                n_cat = st.selectbox("Category", ["Cold Drinks", "In-House Chocolates", "In-House Chips", "Beverages", "Mocktails", "Burgers & Meals", "Fries & Snacks"])
+                # Clean, straightforward categories
+                n_cat = st.selectbox("Category", ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates", "Other"])
                 n_cost = st.number_input("Cost to you (₹)", 0)
                 n_sell = st.number_input("Selling Price (₹)", 0)
                 n_qty = st.number_input("Starting Stock", 0)
-                if st.form_submit_button("Add to Database"):
+                if st.form_submit_button("Add to Database", use_container_width=True):
                     conn.table("inventory").insert({"item_name": n_name, "category": n_cat, "cost_price": n_cost, "selling_price": n_sell, "stock_level": n_qty}).execute()
                     st.success("Item Added!"); st.rerun()
         
@@ -380,21 +389,13 @@ with t5:
 
             st.divider()
             
-            st.write("### 🍔 F&B Profitability & Vendor Ledger")
+            st.write("### 🍔 F&B Financials")
             sales_res = conn.table("cafe_orders").select("*").execute()
             sdf = pd.DataFrame(sales_res.data)
             if not sdf.empty:
-                if not inv_df.empty: sdf = sdf.merge(inv_df[['item_name', 'category']], left_on='items', right_on='item_name', how='left')
-                else: sdf['category'] = 'Unknown'
-                
-                inhouse_cats = ['Cold Drinks', 'In-House Chocolates', 'In-House Chips']
-                sdf['Type'] = sdf['category'].apply(lambda x: "In-House" if x in inhouse_cats else "Vendor (Hunger Monkey)")
-                
                 p_col1, p_col2 = st.columns(2)
-                vendor_df = sdf[sdf['Type'] == 'Vendor (Hunger Monkey)']
-                inhouse_df = sdf[sdf['Type'] == 'In-House']
-                
-                p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Owed to Hunger Monkey (Cost)</h4><h2 style='color:#EF4444'>₹{vendor_df['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                # Clean, unified F&B numbers
+                p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{sdf['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
                 p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{sdf['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
 
             st.divider()
