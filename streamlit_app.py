@@ -242,14 +242,23 @@ with t2:
             st.write("### ➕ Add New Item")
             with st.form("new_inv"):
                 n_name = st.text_input("Name (e.g., Red Bull, Snickers)")
-                # Clean, straightforward categories
                 n_cat = st.selectbox("Category", ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates", "Other"])
-                n_cost = st.number_input("Cost to you (₹)", 0)
-                n_sell = st.number_input("Selling Price (₹)", 0)
+                n_cost = st.number_input("Cost to you (₹)", 0.0)
+                n_sell = st.number_input("Selling Price (₹)", 0.0)
                 n_qty = st.number_input("Starting Stock", 0)
                 if st.form_submit_button("Add to Database", use_container_width=True):
-                    conn.table("inventory").insert({"item_name": n_name, "category": n_cat, "cost_price": n_cost, "selling_price": n_sell, "stock_level": n_qty}).execute()
-                    st.success("Item Added!"); st.rerun()
+                    # BULLETPROOF CHECK
+                    if not n_name.strip():
+                        st.error("⚠️ Please enter a name for the item.")
+                    elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values:
+                        st.error(f"⚠️ '{n_name}' already exists in your inventory! Use the 'Refill' section instead.")
+                    else:
+                        try:
+                            conn.table("inventory").insert({"item_name": n_name.strip(), "category": n_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
+                            st.success(f"Successfully added {n_name}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to add to database. Error: {e}")
         
         st.write("---")
         st.write("### Low Stock Alerts")
@@ -394,7 +403,6 @@ with t5:
             sdf = pd.DataFrame(sales_res.data)
             if not sdf.empty:
                 p_col1, p_col2 = st.columns(2)
-                # Clean, unified F&B numbers
                 p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{sdf['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
                 p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{sdf['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
 
