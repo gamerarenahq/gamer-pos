@@ -376,16 +376,28 @@ with t4:
     try:
         raw = conn.table("sales").select("*").execute()
         df = pd.DataFrame(raw.data)
+        
+        today_str = datetime.now(IST).strftime('%Y-%m-%d')
+        
+        # New query to automatically grab exactly what the cafe sold today
+        try:
+            cafe_raw = conn.table("cafe_orders").select("total_revenue").eq("date", today_str).execute()
+            today_fnb = sum([row['total_revenue'] for row in cafe_raw.data]) if cafe_raw.data else 0
+        except:
+            today_fnb = 0
+
         if not df.empty:
             df['date_str'] = df['date'].str[:10] 
-            today_str = datetime.now(IST).strftime('%Y-%m-%d')
             t_df = df[df['date_str'] == today_str]
             comp = t_df[t_df['status'] == 'Completed']
-            m1, m2, m3, m4 = st.columns(4)
+            
+            # Expanded to 5 columns to fit the new metric
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{comp[comp['method']=='Cash']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
             m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{comp[comp['method']!='Cash']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
             m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{comp['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
             m4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+            m5.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.divider()
             st.write("### Export Data")
@@ -423,7 +435,6 @@ with t5:
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
 
-                # Date calculations
                 now_d = datetime.now(IST).date()
                 start_tw = now_d - timedelta(days=now_d.weekday())
                 start_lw = start_tw - timedelta(days=7)
@@ -433,7 +444,6 @@ with t5:
                 end_lm = start_tm - timedelta(days=1)
                 start_lm = end_lm.replace(day=1)
 
-                # Revenue aggregations
                 wtd = comp_df[comp_df['date_obj'].dt.date >= start_tw]['total'].sum()
                 lw = comp_df[(comp_df['date_obj'].dt.date >= start_lw) & (comp_df['date_obj'].dt.date <= end_lw)]['total'].sum()
                 mtd = comp_df[comp_df['date_obj'].dt.date >= start_tm]['total'].sum()
