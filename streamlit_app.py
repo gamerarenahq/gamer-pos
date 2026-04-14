@@ -44,7 +44,6 @@ try: conn = st.connection("supabase", type=SupabaseConnection)
 except: st.error("Database Connection Error."); st.stop()
 
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
-# Define categories that come from outside and don't need inventory tracking
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
 def get_price(cat, dur, extra=0):
@@ -158,7 +157,6 @@ with t2:
                         for i, (_, r) in enumerate(cat_items.iterrows()):
                             st.markdown("<div class='menu-btn'>", unsafe_allow_html=True)
                             
-                            # THE FIX: Only track and disable stock for In-House items
                             track_stock = cat not in VENDOR_CATS
                             is_disabled = track_stock and r['stock_level'] <= 0
                             stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
@@ -205,12 +203,10 @@ with t2:
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 else:
-                    # THE FIX: Explicit payment selection for Walk-In F&B
                     direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="walkin_pay")
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True):
                     for item in st.session_state.fnb_cart:
-                        # THE FIX: Only deduct if track_stock is True
                         if item.get('track_stock', False) and item['id'] != 'byob':
                             cur_stock = inv_df[inv_df['id'] == item['id']].iloc[0]['stock_level']
                             conn.table("inventory").update({"stock_level": int(cur_stock - 1)}).eq("id", item['id']).execute()
@@ -237,7 +233,6 @@ with t2:
         with c1:
             st.write("### 📥 Refill Existing Stock")
             if not inv_df.empty:
-                # Only show items that actually track stock
                 trackable_items = inv_df[~inv_df['category'].isin(VENDOR_CATS)]
                 if not trackable_items.empty:
                     refill_item = st.selectbox("Select Item to Refill", trackable_items['item_name'].tolist())
@@ -261,7 +256,6 @@ with t2:
             with st.form("new_inv"):
                 n_name = st.text_input("Name (e.g., Red Bull, Snickers)")
                 
-                # THE FIX: Dynamic Category dropdown with "Create New"
                 existing_cats = inv_df['category'].dropna().unique().tolist() if not inv_df.empty else []
                 base_cats = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates"]
                 all_cats = sorted(list(set(base_cats + existing_cats))) + ["➕ Create New Category"]
@@ -415,10 +409,11 @@ with t4:
             cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
             cafe_df = pd.DataFrame(cafe_raw.data)
             today_fnb = cafe_df['total_revenue'].sum() if not cafe_df.empty else 0
+            today_fnb_profit = cafe_df['profit'].sum() if not cafe_df.empty else 0
             fnb_cash = cafe_df[cafe_df['method'] == 'Cash']['total_revenue'].sum() if not cafe_df.empty else 0
             fnb_upi = cafe_df[cafe_df['method'] == 'UPI']['total_revenue'].sum() if not cafe_df.empty else 0
         except:
-            today_fnb = 0; fnb_cash = 0; fnb_upi = 0
+            today_fnb = 0; today_fnb_profit = 0; fnb_cash = 0; fnb_upi = 0
 
         if not df.empty:
             df['date_str'] = df['date'].str[:10] 
@@ -429,12 +424,13 @@ with t4:
             total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
             grand_total = total_cash + total_upi
             
-            m1, m2, m3, m4, m5 = st.columns(5)
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
             m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{total_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{total_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{grand_total:,.0f}</h2></div>", unsafe_allow_html=True)
-            m4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-            m5.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
+            m4.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B Sale<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
+            m5.markdown(f"<div class='metric-box' style='border-color:#10B981'>Today's F&B Profit<h2 style='color:#10B981'>₹{today_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
+            m6.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.divider()
             st.write("### Export Data")
@@ -471,7 +467,6 @@ with t5:
                 vdf['date_str'] = vdf['date'].str[:10]
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 
-                # THE FIX: Bring all direct Cafe orders into the main vault metrics!
                 cafe_res = conn.table("cafe_orders").select("*").in_("method", ["Cash", "UPI"]).execute()
                 cafe_direct_df = pd.DataFrame(cafe_res.data)
                 
