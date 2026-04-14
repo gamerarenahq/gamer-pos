@@ -44,6 +44,8 @@ try: conn = st.connection("supabase", type=SupabaseConnection)
 except: st.error("Database Connection Error."); st.stop()
 
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
+# Define categories that come from outside and don't need inventory tracking
+VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
 def get_price(cat, dur, extra=0):
     if cat == "PS5": return (int(dur) * (150 + (extra * 100))) + ((1 if (dur % 1) != 0 else 0) * (100 + (extra * 100)))
@@ -155,9 +157,15 @@ with t2:
                         grid = st.columns(4)
                         for i, (_, r) in enumerate(cat_items.iterrows()):
                             st.markdown("<div class='menu-btn'>", unsafe_allow_html=True)
-                            label = f"{r['item_name']}\n₹{r['selling_price']:.0f}"
-                            if grid[i % 4].button(label, key=f"fnb_{r['id']}", disabled=r['stock_level'] <= 0, use_container_width=True):
-                                st.session_state.fnb_cart.append({"id": r['id'], "name": r['item_name'], "price": r['selling_price'], "cost": r['cost_price']})
+                            
+                            # THE FIX: Only track and disable stock for In-House items
+                            track_stock = cat not in VENDOR_CATS
+                            is_disabled = track_stock and r['stock_level'] <= 0
+                            stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
+                            label = f"{r['item_name']}\n₹{r['selling_price']:.0f}{stock_label}"
+                            
+                            if grid[i % 4].button(label, key=f"fnb_{r['id']}", disabled=is_disabled, use_container_width=True):
+                                st.session_state.fnb_cart.append({"id": r['id'], "name": r['item_name'], "price": r['selling_price'], "cost": r['cost_price'], "track_stock": track_stock})
                                 st.rerun()
                             st.markdown("</div>", unsafe_allow_html=True)
                 
@@ -168,7 +176,7 @@ with t2:
                     byob_c = 105 if has_cheese else 75
                     if st.button(f"Add BYOB (₹{byob_p})"):
                         txt = f"BYOB ({chip_choice} {'w/ Cheese' if has_cheese else ''})"
-                        st.session_state.fnb_cart.append({"id": "byob", "name": txt, "price": byob_p, "cost": byob_c})
+                        st.session_state.fnb_cart.append({"id": "byob", "name": txt, "price": byob_p, "cost": byob_c, "track_stock": False})
                         st.rerun()
 
         with col_cart:
@@ -189,22 +197,28 @@ with t2:
                 
                 assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"])
                 gamer_id = None
+                direct_pay_method = None
+                
                 if assign == "Add to Active Gamer":
                     if not active_gamers.empty:
                         sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab2_gamer")
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
+                else:
+                    # THE FIX: Explicit payment selection for Walk-In F&B
+                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="walkin_pay")
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True):
                     for item in st.session_state.fnb_cart:
-                        if item['id'] != 'byob':
+                        # THE FIX: Only deduct if track_stock is True
+                        if item.get('track_stock', False) and item['id'] != 'byob':
                             cur_stock = inv_df[inv_df['id'] == item['id']].iloc[0]['stock_level']
                             conn.table("inventory").update({"stock_level": int(cur_stock - 1)}).eq("id", item['id']).execute()
                             
                     conn.table("cafe_orders").insert({
                         "date": datetime.now(IST).strftime('%Y-%m-%d'), "items": items_str, 
                         "total_revenue": float(tot_sell), "total_cost": float(tot_cost), "profit": float(tot_sell - tot_cost),
-                        "method": "Tab" if assign == "Add to Active Gamer" else "Direct"
+                        "method": "Tab" if assign == "Add to Active Gamer" else direct_pay_method
                     }).execute()
                     
                     if assign == "Add to Active Gamer" and gamer_id:
@@ -223,12 +237,16 @@ with t2:
         with c1:
             st.write("### 📥 Refill Existing Stock")
             if not inv_df.empty:
-                refill_item = st.selectbox("Select Item to Refill", inv_df['item_name'].tolist())
-                refill_qty = st.number_input("Quantity Arrived", 1, 500, 10)
-                if st.button("Update Stock Levels", use_container_width=True):
-                    c_qty = inv_df[inv_df['item_name'] == refill_item].iloc[0]['stock_level']
-                    conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
-                    st.success(f"Added stock to {refill_item}!"); st.rerun()
+                # Only show items that actually track stock
+                trackable_items = inv_df[~inv_df['category'].isin(VENDOR_CATS)]
+                if not trackable_items.empty:
+                    refill_item = st.selectbox("Select Item to Refill", trackable_items['item_name'].tolist())
+                    refill_qty = st.number_input("Quantity Arrived", 1, 500, 10)
+                    if st.button("Update Stock Levels", use_container_width=True):
+                        c_qty = inv_df[inv_df['item_name'] == refill_item].iloc[0]['stock_level']
+                        conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
+                        st.success(f"Added stock to {refill_item}!"); st.rerun()
+                else: st.info("No trackable items in inventory.")
             
             st.write("---")
             st.write("### 🗑️ Delete Item")
@@ -242,29 +260,43 @@ with t2:
             st.write("### ➕ Add New Item")
             with st.form("new_inv"):
                 n_name = st.text_input("Name (e.g., Red Bull, Snickers)")
-                n_cat = st.selectbox("Category", ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates", "Other"])
+                
+                # THE FIX: Dynamic Category dropdown with "Create New"
+                existing_cats = inv_df['category'].dropna().unique().tolist() if not inv_df.empty else []
+                base_cats = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates"]
+                all_cats = sorted(list(set(base_cats + existing_cats))) + ["➕ Create New Category"]
+                
+                n_cat_sel = st.selectbox("Category", all_cats)
+                n_cat_new = st.text_input("If 'Create New Category', type name here:")
+                
                 n_cost = st.number_input("Cost to you (₹)", 0.0)
                 n_sell = st.number_input("Selling Price (₹)", 0.0)
-                n_qty = st.number_input("Starting Stock", 0)
+                n_qty = st.number_input("Starting Stock (Leave 0 for outside vendor items)", 0)
+                
                 if st.form_submit_button("Add to Database", use_container_width=True):
+                    final_cat = n_cat_new.strip() if n_cat_sel == "➕ Create New Category" else n_cat_sel
+                    
                     if not n_name.strip():
                         st.error("⚠️ Please enter a name for the item.")
+                    elif not final_cat:
+                        st.error("⚠️ Please select or enter a category.")
                     elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values:
-                        st.error(f"⚠️ '{n_name}' already exists in your inventory! Use the 'Refill' section instead.")
+                        st.error(f"⚠️ '{n_name}' already exists in your inventory!")
                     else:
                         try:
-                            conn.table("inventory").insert({"item_name": n_name.strip(), "category": n_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
+                            conn.table("inventory").insert({"item_name": n_name.strip(), "category": final_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
                             st.success(f"Successfully added {n_name}!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to add to database. Error: {e}")
         
         st.write("---")
-        st.write("### Low Stock Alerts")
+        st.write("### Low Stock Alerts (In-House Only)")
         if not inv_df.empty:
-            low = inv_df[inv_df['stock_level'] <= 5]
+            trackable_only = inv_df[~inv_df['category'].isin(VENDOR_CATS)]
+            low = trackable_only[trackable_only['stock_level'] <= 5]
             if not low.empty: st.error("🚨 These items need restocking immediately!")
-            st.dataframe(inv_df[['item_name', 'category', 'stock_level', 'selling_price']], use_container_width=True, hide_index=True)
+            st.dataframe(trackable_only[['item_name', 'category', 'stock_level', 'selling_price']], use_container_width=True, hide_index=True)
 
 # ==========================================
 # TAB 3: BOOKINGS, CART & QUEUE
@@ -379,23 +411,28 @@ with t4:
         
         today_str = datetime.now(IST).strftime('%Y-%m-%d')
         
-        # New query to automatically grab exactly what the cafe sold today
         try:
-            cafe_raw = conn.table("cafe_orders").select("total_revenue").eq("date", today_str).execute()
-            today_fnb = sum([row['total_revenue'] for row in cafe_raw.data]) if cafe_raw.data else 0
+            cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
+            cafe_df = pd.DataFrame(cafe_raw.data)
+            today_fnb = cafe_df['total_revenue'].sum() if not cafe_df.empty else 0
+            fnb_cash = cafe_df[cafe_df['method'] == 'Cash']['total_revenue'].sum() if not cafe_df.empty else 0
+            fnb_upi = cafe_df[cafe_df['method'] == 'UPI']['total_revenue'].sum() if not cafe_df.empty else 0
         except:
-            today_fnb = 0
+            today_fnb = 0; fnb_cash = 0; fnb_upi = 0
 
         if not df.empty:
             df['date_str'] = df['date'].str[:10] 
             t_df = df[df['date_str'] == today_str]
             comp = t_df[t_df['status'] == 'Completed']
             
-            # Expanded to 5 columns to fit the new metric
+            total_cash = comp[comp['method']=='Cash']['total'].sum() + fnb_cash
+            total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
+            grand_total = total_cash + total_upi
+            
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{comp[comp['method']=='Cash']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-            m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{comp[comp['method']!='Cash']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-            m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{comp['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+            m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{total_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+            m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{total_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{grand_total:,.0f}</h2></div>", unsafe_allow_html=True)
             m4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
             m5.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
             
@@ -433,7 +470,19 @@ with t5:
             if not vdf.empty:
                 vdf['date_str'] = vdf['date'].str[:10]
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
-                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
+                
+                # THE FIX: Bring all direct Cafe orders into the main vault metrics!
+                cafe_res = conn.table("cafe_orders").select("*").in_("method", ["Cash", "UPI"]).execute()
+                cafe_direct_df = pd.DataFrame(cafe_res.data)
+                
+                if not cafe_direct_df.empty:
+                    cafe_direct_df['date_str'] = cafe_direct_df['date'].str[:10]
+                    cafe_direct_df['total'] = cafe_direct_df['total_revenue']
+                    revenue_df = pd.concat([comp_df[['date_str', 'total']], cafe_direct_df[['date_str', 'total']]])
+                else:
+                    revenue_df = comp_df[['date_str', 'total']]
+
+                revenue_df['date_obj'] = pd.to_datetime(revenue_df['date_str'])
 
                 now_d = datetime.now(IST).date()
                 start_tw = now_d - timedelta(days=now_d.weekday())
@@ -444,11 +493,11 @@ with t5:
                 end_lm = start_tm - timedelta(days=1)
                 start_lm = end_lm.replace(day=1)
 
-                wtd = comp_df[comp_df['date_obj'].dt.date >= start_tw]['total'].sum()
-                lw = comp_df[(comp_df['date_obj'].dt.date >= start_lw) & (comp_df['date_obj'].dt.date <= end_lw)]['total'].sum()
-                mtd = comp_df[comp_df['date_obj'].dt.date >= start_tm]['total'].sum()
-                lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)]['total'].sum()
-                lifetime = comp_df['total'].sum()
+                wtd = revenue_df[revenue_df['date_obj'].dt.date >= start_tw]['total'].sum()
+                lw = revenue_df[(revenue_df['date_obj'].dt.date >= start_lw) & (revenue_df['date_obj'].dt.date <= end_lw)]['total'].sum()
+                mtd = revenue_df[revenue_df['date_obj'].dt.date >= start_tm]['total'].sum()
+                lm = revenue_df[(revenue_df['date_obj'].dt.date >= start_lm) & (revenue_df['date_obj'].dt.date <= end_lm)]['total'].sum()
+                lifetime = revenue_df['total'].sum()
 
                 st.write("### 📈 Executive Revenue Dashboard")
                 c1, c2, c3, c4, c5 = st.columns(5)
@@ -463,6 +512,7 @@ with t5:
                 st.write("### 🎮 Hardware Income Breakdown")
                 hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
                 comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
+                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
                 
                 hw_life = comp_df.groupby('Category')['total'].sum().rename('Lifetime Gross')
                 hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['total'].sum().rename('This Month')
@@ -485,7 +535,7 @@ with t5:
 
             if not vdf.empty:
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
-                tot_inc = comp_df.groupby('date_str')['total'].sum().rename('Gross Income').reset_index()
+                tot_inc = revenue_df.groupby('date_str')['total'].sum().rename('Gross Income').reset_index()
                 
                 exp_raw = conn.table("expenses").select("*").execute()
                 exp_df = pd.DataFrame(exp_raw.data)
