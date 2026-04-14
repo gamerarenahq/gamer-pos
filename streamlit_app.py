@@ -106,7 +106,6 @@ with t1:
                 else:
                     fnb_html = ""
 
-                # THE FIX: Written as a continuous string without multi-line indents to prevent Markdown code-block rendering
                 card_html = (
                     f"<div style='background:{bg_col}; border:1px solid #2D3446; border-top:4px solid {b_col}; border-radius:14px; padding:20px; margin-bottom:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>"
                     f"<div style='display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #2D3446; padding-bottom: 10px; margin-bottom: 15px;'>"
@@ -428,47 +427,48 @@ with t3:
 # ==========================================
 with t4:
     st.subheader("📊 Today's Summary & Exports")
-    try:
-        raw = conn.table("sales").select("*").execute()
-        df = pd.DataFrame(raw.data)
-        
-        today_str = datetime.now(IST).strftime('%Y-%m-%d')
-        
+    if st.text_input("Manager Passcode", type="password", key="t4_pwd") == "Shreenad@0511":
         try:
-            cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
-            cafe_df = pd.DataFrame(cafe_raw.data)
-            today_fnb = cafe_df['total_revenue'].sum() if not cafe_df.empty else 0
-            today_fnb_profit = cafe_df['profit'].sum() if not cafe_df.empty else 0
-            fnb_cash = cafe_df[cafe_df['method'] == 'Cash']['total_revenue'].sum() if not cafe_df.empty else 0
-            fnb_upi = cafe_df[cafe_df['method'] == 'UPI']['total_revenue'].sum() if not cafe_df.empty else 0
-        except:
-            today_fnb = 0; today_fnb_profit = 0; fnb_cash = 0; fnb_upi = 0
+            raw = conn.table("sales").select("*").execute()
+            df = pd.DataFrame(raw.data)
+            
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            
+            try:
+                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
+                cafe_df = pd.DataFrame(cafe_raw.data)
+                today_fnb = cafe_df['total_revenue'].sum() if not cafe_df.empty else 0
+                today_fnb_profit = cafe_df['profit'].sum() if not cafe_df.empty else 0
+                fnb_cash = cafe_df[cafe_df['method'] == 'Cash']['total_revenue'].sum() if not cafe_df.empty else 0
+                fnb_upi = cafe_df[cafe_df['method'] == 'UPI']['total_revenue'].sum() if not cafe_df.empty else 0
+            except:
+                today_fnb = 0; today_fnb_profit = 0; fnb_cash = 0; fnb_upi = 0
 
-        if not df.empty:
-            df['date_str'] = df['date'].str[:10] 
-            t_df = df[df['date_str'] == today_str]
-            comp = t_df[t_df['status'] == 'Completed']
-            
-            total_cash = comp[comp['method']=='Cash']['total'].sum() + fnb_cash
-            total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
-            grand_total = total_cash + total_upi
-            
-            m1, m2, m3, m4, m5, m6 = st.columns(6)
-            m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{total_cash:,.0f}</h2></div>", unsafe_allow_html=True)
-            m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{total_upi:,.0f}</h2></div>", unsafe_allow_html=True)
-            m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{grand_total:,.0f}</h2></div>", unsafe_allow_html=True)
-            m4.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B Sale<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
-            m5.markdown(f"<div class='metric-box' style='border-color:#10B981'>Today's F&B Profit<h2 style='color:#10B981'>₹{today_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
-            m6.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-            
-            st.divider()
-            st.write("### Export Data")
-            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
-            if len(d_range) == 2:
-                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
-                f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
-                st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
-    except: st.error("Error loading summary.")
+            if not df.empty:
+                df['date_str'] = df['date'].str[:10] 
+                t_df = df[df['date_str'] == today_str]
+                comp = t_df[t_df['status'] == 'Completed']
+                
+                total_cash = comp[comp['method']=='Cash']['total'].sum() + fnb_cash
+                total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
+                grand_total = total_cash + total_upi
+                
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{total_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+                m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{total_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+                m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{grand_total:,.0f}</h2></div>", unsafe_allow_html=True)
+                m4.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B Sale<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
+                m5.markdown(f"<div class='metric-box' style='border-color:#10B981'>Today's F&B Profit<h2 style='color:#10B981'>₹{today_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
+                m6.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                
+                st.divider()
+                st.write("### Export Data")
+                d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
+                if len(d_range) == 2:
+                    s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
+                    f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
+                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
+        except: st.error("Error loading summary.")
 
 # ==========================================
 # TAB 5: MASTER VAULT
