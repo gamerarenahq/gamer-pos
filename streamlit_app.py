@@ -84,7 +84,6 @@ with t1:
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
 
-                # Dynamic Styling for the Custom Cards
                 if time_left < 0: 
                     b_col = "#EF4444"
                     bg_col = "#2D1E1E"
@@ -102,23 +101,27 @@ with t1:
                     txt = f"⏳ {int(time_left)}m left"
                 
                 fnb_val = row.get('fnb_total') or 0
-                fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>" if fnb_val > 0 else ""
+                if fnb_val > 0:
+                    fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>"
+                else:
+                    fnb_html = ""
 
-                card_html = f"""
-                <div style='background:{bg_col}; border:1px solid #2D3446; border-top:4px solid {b_col}; border-radius:14px; padding:18px; margin-bottom:15px; display:flex; flex-direction:column; gap:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
-                    <div style='display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #2D3446; padding-bottom: 10px;'>
-                        <span style='color:white; font-size:18px; font-weight:800; letter-spacing: 0.5px;'>{row['system']}</span>
-                        <span style='color:#9CA3AF; font-size:14px; font-weight:600;'>{row['customer']}</span>
-                    </div>
-                    <div style='text-align: center; padding: 8px 0;'>
-                        <h2 style='color:{t_col}; margin:0; padding:0; font-size:32px; font-weight:900; letter-spacing: 0.5px;'>{txt}</h2>
-                    </div>
-                    <div style='display:flex; gap:10px; justify-content: center; flex-wrap:wrap;'>
-                        <span style='background:#2B3245; color:#98DED9; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🎮 ₹{row['total']:.0f}</span>
-                        {fnb_html}
-                    </div>
-                </div>
-                """
+                # THE FIX: Written as a continuous string without multi-line indents to prevent Markdown code-block rendering
+                card_html = (
+                    f"<div style='background:{bg_col}; border:1px solid #2D3446; border-top:4px solid {b_col}; border-radius:14px; padding:20px; margin-bottom:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #2D3446; padding-bottom: 10px; margin-bottom: 15px;'>"
+                    f"<span style='color:white; font-size:18px; font-weight:800; letter-spacing: 0.5px;'>{row['system']}</span>"
+                    f"<span style='color:#9CA3AF; font-size:14px; font-weight:600;'>{row['customer']}</span>"
+                    f"</div>"
+                    f"<div style='text-align: center; margin-bottom: 15px;'>"
+                    f"<h2 style='color:{t_col}; margin:0; padding:0; font-size:34px; font-weight:900; letter-spacing: 0.5px;'>{txt}</h2>"
+                    f"</div>"
+                    f"<div style='display:flex; gap:10px; justify-content: center; flex-wrap:wrap;'>"
+                    f"<span style='background:#2B3245; color:#98DED9; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🎮 ₹{row['total']:.0f}</span>"
+                    f"{fnb_html}"
+                    f"</div>"
+                    f"</div>"
+                )
 
                 with grid[i % 3]:
                     st.markdown(card_html, unsafe_allow_html=True)
@@ -128,10 +131,10 @@ with t1:
         st.subheader("Operator Panel")
         if not active_gamers.empty:
             active_gamers['lbl'] = active_gamers['customer'] + " | " + active_gamers['system']
-            sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab1_gamer")
+            sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t1_gamer_sel")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             
-            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key="tab1_action")
+            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key="t1_op_mode")
             
             if op_mode == "Smart Checkout":
                 try: played_mins = int((datetime.now(IST) - pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)).total_seconds() / 60.0)
@@ -142,7 +145,7 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5)
+                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key="t1_billed_hrs")
                 
                 game_bill = float(row['total'])
                 food_bill = float(row.get('fnb_total') or 0)
@@ -150,14 +153,14 @@ with t1:
                 
                 st.markdown(f"<div style='background:#161922; padding:10px; border-radius:8px;'><small>Gaming: ₹{game_bill:.0f}<br>F&B Tab: ₹{food_bill:.0f}</small><h3 style='color:#98DED9; margin:0;'>Total: ₹{grand_total:.0f}</h3></div><br>", unsafe_allow_html=True)
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key="tab1_pay")
-                if st.button("🛑 Collect & Close", type="primary"):
+                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key="t1_pay_method")
+                if st.button("🛑 Collect & Close", type="primary", key="t1_close_btn"):
                     conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(grand_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
-                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key="tab1_ext")
-                if st.button("➕ Extend Session"):
+                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key="t1_extra_hrs")
+                if st.button("➕ Extend Session", key="t1_ext_btn"):
                     new_dur = float(row['duration']) + float(ext)
                     new_total = float(row['total']) + float(get_price(SYSTEMS[row['system']], ext, 0))
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
@@ -194,11 +197,11 @@ with t2:
                             st.markdown("</div>", unsafe_allow_html=True)
                 
                 with st.expander("🍟 BYOB (Build Your Own Bag)"):
-                    chip_choice = st.selectbox("Base Chips", ["Blue Lays", "Kurkure", "Doritos", "Uncle Chipps"])
-                    has_cheese = st.checkbox("Add Cheese (+₹30)")
+                    chip_choice = st.selectbox("Base Chips", ["Blue Lays", "Kurkure", "Doritos", "Uncle Chipps"], key="t2_byob_chips")
+                    has_cheese = st.checkbox("Add Cheese (+₹30)", key="t2_byob_cheese")
                     byob_p = 140 if has_cheese else 110
                     byob_c = 105 if has_cheese else 75
-                    if st.button(f"Add BYOB (₹{byob_p})"):
+                    if st.button(f"Add BYOB (₹{byob_p})", key="t2_byob_btn"):
                         txt = f"BYOB ({chip_choice} {'w/ Cheese' if has_cheese else ''})"
                         st.session_state.fnb_cart.append({"id": "byob", "name": txt, "price": byob_p, "cost": byob_c, "track_stock": False})
                         st.rerun()
@@ -219,19 +222,19 @@ with t2:
                 
                 st.markdown(f"### Total: ₹{tot_sell:.0f}")
                 
-                assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"])
+                assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"], key="t2_assign")
                 gamer_id = None
                 direct_pay_method = None
                 
                 if assign == "Add to Active Gamer":
                     if not active_gamers.empty:
-                        sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="tab2_gamer")
+                        sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t2_gamer_sel")
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 else:
-                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="walkin_pay")
+                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="t2_walkin_pay")
                 
-                if st.button("✅ CONFIRM ORDER", use_container_width=True):
+                if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
                     for item in st.session_state.fnb_cart:
                         if item.get('track_stock', False) and item['id'] != 'byob':
                             cur_stock = inv_df[inv_df['id'] == item['id']].iloc[0]['stock_level']
@@ -261,9 +264,9 @@ with t2:
             if not inv_df.empty:
                 trackable_items = inv_df[~inv_df['category'].isin(VENDOR_CATS)]
                 if not trackable_items.empty:
-                    refill_item = st.selectbox("Select Item to Refill", trackable_items['item_name'].tolist())
-                    refill_qty = st.number_input("Quantity Arrived", 1, 500, 10)
-                    if st.button("Update Stock Levels", use_container_width=True):
+                    refill_item = st.selectbox("Select Item to Refill", trackable_items['item_name'].tolist(), key="t2_refill_item")
+                    refill_qty = st.number_input("Quantity Arrived", 1, 500, 10, key="t2_refill_qty")
+                    if st.button("Update Stock Levels", use_container_width=True, key="t2_refill_btn"):
                         c_qty = inv_df[inv_df['item_name'] == refill_item].iloc[0]['stock_level']
                         conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
                         st.success(f"Added stock to {refill_item}!"); st.rerun()
@@ -272,26 +275,26 @@ with t2:
             st.write("---")
             st.write("### 🗑️ Delete Item")
             if not inv_df.empty:
-                del_item = st.selectbox("Select Item to Delete", inv_df['item_name'].tolist())
-                if st.button("Delete from Database", type="primary", use_container_width=True):
+                del_item = st.selectbox("Select Item to Delete", inv_df['item_name'].tolist(), key="t2_del_item")
+                if st.button("Delete from Database", type="primary", use_container_width=True, key="t2_del_btn"):
                     conn.table("inventory").delete().eq("item_name", del_item).execute()
                     st.warning(f"Deleted {del_item} permanently!"); st.rerun()
 
         with c2:
             st.write("### ➕ Add New Item")
             with st.form("new_inv"):
-                n_name = st.text_input("Name (e.g., Red Bull, Snickers)")
+                n_name = st.text_input("Name (e.g., Red Bull, Snickers)", key="t2_n_name")
                 
                 existing_cats = inv_df['category'].dropna().unique().tolist() if not inv_df.empty else []
                 base_cats = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates"]
                 all_cats = sorted(list(set(base_cats + existing_cats))) + ["➕ Create New Category"]
                 
-                n_cat_sel = st.selectbox("Category", all_cats)
-                n_cat_new = st.text_input("If 'Create New Category', type name here:")
+                n_cat_sel = st.selectbox("Category", all_cats, key="t2_n_cat_sel")
+                n_cat_new = st.text_input("If 'Create New Category', type name here:", key="t2_n_cat_new")
                 
-                n_cost = st.number_input("Cost to you (₹)", 0.0)
-                n_sell = st.number_input("Selling Price (₹)", 0.0)
-                n_qty = st.number_input("Starting Stock (Leave 0 for outside vendor items)", 0)
+                n_cost = st.number_input("Cost to you (₹)", 0.0, key="t2_n_cost")
+                n_sell = st.number_input("Selling Price (₹)", 0.0, key="t2_n_sell")
+                n_qty = st.number_input("Starting Stock (Leave 0 for outside vendor items)", 0, key="t2_n_qty")
                 
                 if st.form_submit_button("Add to Database", use_container_width=True):
                     final_cat = n_cat_new.strip() if n_cat_sel == "➕ Create New Category" else n_cat_sel
@@ -326,22 +329,22 @@ with t3:
     with col_form:
         st.subheader("1. Lead & Details")
         with st.container(border=True):
-            name = st.text_input("Gamer / Group Name", key=f"name_{st.session_state.form_reset}")
-            phone = st.text_input("Phone Number", key=f"phone_{st.session_state.form_reset}")
+            name = st.text_input("Gamer / Group Name", key=f"t3_n_{st.session_state.form_reset}")
+            phone = st.text_input("Phone Number", key=f"t3_p_{st.session_state.form_reset}")
             st.write("---")
-            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "🕒 Book for Later (Advance)"], horizontal=True, key=f"type_{st.session_state.form_reset}")
+            b_type = st.radio("Booking Type", ["🏃‍♂️ Walk-in (Play Now)", "🕒 Book for Later (Advance)"], horizontal=True, key=f"t3_bt_{st.session_state.form_reset}")
             
             if "Walk-in" in b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"w_t_{st.session_state.form_reset}")
+                b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"t3_wt_{st.session_state.form_reset}")
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Active"; btn_txt = "🚀 Start Session Now"
                 st.info(f"Session will be logged for today at {time_str}")
             else:
                 d_col, t_col = st.columns(2)
-                b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"d_{st.session_state.form_reset}")
+                b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"t3_d_{st.session_state.form_reset}")
                 def_time = (datetime.now(IST) + timedelta(hours=1)).replace(minute=0, second=0).time()
-                b_time = t_col.time_input("Select Time", value=def_time, step=900, key=f"t_{st.session_state.form_reset}")
+                b_time = t_col.time_input("Select Time", value=def_time, step=900, key=f"t3_bt2_{st.session_state.form_reset}")
                 sch_date = b_date.strftime('%Y-%m-%d')
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"; btn_txt = f"📅 Confirm Reservation"
@@ -350,11 +353,11 @@ with t3:
         st.subheader("2. Add Hardware")
         with st.container(border=True):
             sys_col, dur_col, ctrl_col = st.columns([2, 1, 1])
-            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()), key=f"sys_{st.session_state.form_reset}")
-            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5, key=f"dur_{st.session_state.form_reset}")
-            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
+            sel_sys = sys_col.selectbox("Hardware", list(SYSTEMS.keys()), key=f"t3_sys_{st.session_state.form_reset}")
+            dur = dur_col.number_input("Hours", 0.5, 12.0, 1.0, 0.5, key=f"t3_dur_{st.session_state.form_reset}")
+            ctrl = ctrl_col.number_input("Extra Ctrl", 0, 3, 0, key=f"t3_ctrl_{st.session_state.form_reset}") if "PS" in sel_sys else 0
             
-            if st.button("➕ Add to Cart", use_container_width=True):
+            if st.button("➕ Add to Cart", use_container_width=True, key=f"t3_add_{st.session_state.form_reset}"):
                 st.session_state.cart.append({"system": sel_sys, "duration": dur, "ctrl": ctrl, "price": get_price(SYSTEMS[sel_sys], dur, ctrl)})
                 st.rerun()
 
@@ -366,11 +369,11 @@ with t3:
                 c_info, c_price, c_del = st.columns([3, 1.5, 1])
                 c_info.write(f"🎮 **{item['system']}** ({item['duration']}h)")
                 c_price.write(f"₹{item['price']}")
-                if c_del.button("❌", key=f"del_{i}_{st.session_state.form_reset}"): st.session_state.cart.pop(i); st.rerun()
+                if c_del.button("❌", key=f"t3_del_{i}_{st.session_state.form_reset}"): st.session_state.cart.pop(i); st.rerun()
             st.divider()
             st.markdown(f"### Total: ₹{sum(item['price'] for item in st.session_state.cart)}")
             
-            if st.button(btn_txt, type="primary", use_container_width=True):
+            if st.button(btn_txt, type="primary", use_container_width=True, key=f"t3_book_{st.session_state.form_reset}"):
                 if not name: st.error("Please enter a Name.")
                 else:
                     conflict = False
@@ -405,8 +408,8 @@ with t3:
                 
                 with c_chk:
                     st.write("✅ **Check-In Gamer**")
-                    sel_chk = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="chk_sel", label_visibility="collapsed")
-                    if st.button("🚀 Start Session", use_container_width=True):
+                    sel_chk = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="t3_chk_sel", label_visibility="collapsed")
+                    if st.button("🚀 Start Session", use_container_width=True, key="t3_start_btn"):
                         t_id = up_df[up_df['lbl'] == sel_chk].iloc[0]['id']
                         now_time = datetime.now(IST).strftime("%I:%M %p")
                         conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", int(t_id)).execute()
@@ -414,8 +417,8 @@ with t3:
                 
                 with c_can:
                     st.write("🚫 **Cancel Booking**")
-                    sel_can = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="can_sel", label_visibility="collapsed")
-                    if st.button("Cancel Booking", type="primary", use_container_width=True):
+                    sel_can = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="t3_can_sel", label_visibility="collapsed")
+                    if st.button("Cancel Booking", type="primary", use_container_width=True, key="t3_can_btn"):
                         t_id = up_df[up_df['lbl'] == sel_can].iloc[0]['id']
                         conn.table("sales").update({"status": "Cancelled"}).eq("id", int(t_id)).execute()
                         st.warning("Booking Cancelled!"); st.rerun()
@@ -460,11 +463,11 @@ with t4:
             
             st.divider()
             st.write("### Export Data")
-            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()])
+            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
             if len(d_range) == 2:
                 s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
                 f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
-                st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv")
+                st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
     except: st.error("Error loading summary.")
 
 # ==========================================
@@ -472,7 +475,7 @@ with t4:
 # ==========================================
 with t5:
     st.subheader("🔐 Master Intelligence Vault")
-    if st.text_input("Master Key", type="password") == "Shreenad@0511":
+    if st.text_input("Master Key", type="password", key="t5_pwd") == "Shreenad@0511":
         try:
             raw_v = conn.table("sales").select("*").execute()
             vdf = pd.DataFrame(raw_v.data)
@@ -480,10 +483,10 @@ with t5:
             with st.expander("💸 Record Cafe Expenses", expanded=False):
                 with st.form("expense_form"):
                     e_desc, e_amt, e_meth = st.columns(3)
-                    desc = e_desc.text_input("Expense Details")
-                    amt = e_amt.number_input("Amount (₹)", 0)
-                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"])
-                    if st.form_submit_button("Log Expense"):
+                    desc = e_desc.text_input("Expense Details", key="t5_e_desc")
+                    amt = e_amt.number_input("Amount (₹)", 0, key="t5_e_amt")
+                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
+                    if st.form_submit_button("Log Expense", use_container_width=True):
                         conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
                         st.success("Logged!"); st.rerun()
 
