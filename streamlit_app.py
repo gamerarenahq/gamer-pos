@@ -17,9 +17,6 @@ st.markdown("""
     h1, h2, h3, h4, p, span, label { color: white !important; }
     .stButton>button { background: #4F46E5; color: white; border-radius: 8px; width: 100%; font-weight: 600; border: none; transition: 0.2s; }
     .stButton>button:hover { background: #4338CA; transform: translateY(-2px); }
-    .crm-card { background-color: #1A1F2B; padding: 20px; border-radius: 12px; border-left: 4px solid #98DED9; margin-bottom: 12px; }
-    .warning-card { background-color: #1A1F2B; padding: 20px; border-radius: 12px; border-left: 4px solid #FF754C; margin-bottom: 12px; }
-    .overdue-card { background-color: #2D1E1E; padding: 20px; border-radius: 12px; border-left: 4px solid #EF4444; margin-bottom: 12px; }
     .metric-box { background-color: #1A1F2B; padding: 20px; border-radius: 12px; text-align: center; border-top: 3px solid #98DED9; margin-bottom: 15px; }
     .panel-box { background: #1A1F2B; padding: 20px; border-radius: 16px; border: 1px solid #2D3446; }
     .menu-btn>button { background: #161922; border: 1px solid #2D3446; height: 70px; border-radius: 10px; }
@@ -87,15 +84,44 @@ with t1:
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
 
-                if time_left < 0: cc, txt = "overdue-card", f"🚨 {abs(int(time_left))}m OVERDUE"
-                elif time_left <= 10: cc, txt = "warning-card", f"⚠️ {int(time_left)}m LEFT"
-                else: cc, txt = "crm-card", f"⏳ {int(time_left)}m left"
+                # Dynamic Styling for the Custom Cards
+                if time_left < 0: 
+                    b_col = "#EF4444"
+                    bg_col = "#2D1E1E"
+                    t_col = "#EF4444"
+                    txt = f"🚨 {abs(int(time_left))}m OVERDUE"
+                elif time_left <= 10: 
+                    b_col = "#FF754C"
+                    bg_col = "#2D231E"
+                    t_col = "#FF754C"
+                    txt = f"⚠️ {int(time_left)}m LEFT"
+                else: 
+                    b_col = "#98DED9"
+                    bg_col = "#1A1F2B"
+                    t_col = "#98DED9"
+                    txt = f"⏳ {int(time_left)}m left"
                 
                 fnb_val = row.get('fnb_total') or 0
-                fnb_str = f" | F&B: ₹{fnb_val:.0f}" if fnb_val > 0 else ""
+                fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>" if fnb_val > 0 else ""
+
+                card_html = f"""
+                <div style='background:{bg_col}; border:1px solid #2D3446; border-top:4px solid {b_col}; border-radius:14px; padding:18px; margin-bottom:15px; display:flex; flex-direction:column; gap:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
+                    <div style='display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #2D3446; padding-bottom: 10px;'>
+                        <span style='color:white; font-size:18px; font-weight:800; letter-spacing: 0.5px;'>{row['system']}</span>
+                        <span style='color:#9CA3AF; font-size:14px; font-weight:600;'>{row['customer']}</span>
+                    </div>
+                    <div style='text-align: center; padding: 8px 0;'>
+                        <h2 style='color:{t_col}; margin:0; padding:0; font-size:32px; font-weight:900; letter-spacing: 0.5px;'>{txt}</h2>
+                    </div>
+                    <div style='display:flex; gap:10px; justify-content: center; flex-wrap:wrap;'>
+                        <span style='background:#2B3245; color:#98DED9; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🎮 ₹{row['total']:.0f}</span>
+                        {fnb_html}
+                    </div>
+                </div>
+                """
 
                 with grid[i % 3]:
-                    st.markdown(f"<div class='{cc}'><h4 style='color:#98DED9; margin:0;'>{row['system']}</h4><b>{row['customer']}</b><br><span style='font-size:12px; color:#9CA3AF;'>Game: ₹{row['total']:.0f}{fnb_str}</span><h3 style='margin:5px 0;'>{txt}</h3></div>", unsafe_allow_html=True)
+                    st.markdown(card_html, unsafe_allow_html=True)
 
     with col_op:
         st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
