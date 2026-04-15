@@ -58,6 +58,12 @@ try:
     
     active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
+    
+    # THE FIX: Safely force all total columns to be valid numbers so the app never crashes on a blank
+    if not db_df.empty:
+        db_df['total'] = pd.to_numeric(db_df['total'], errors='coerce').fillna(0.0)
+        db_df['fnb_total'] = pd.to_numeric(db_df['fnb_total'], errors='coerce').fillna(0.0)
+        
 except Exception as e:
     st.error(f"Syncing Database... {e}")
     inv_df = pd.DataFrame(columns=inv_cols)
@@ -100,7 +106,9 @@ with t1:
                     t_col = "#98DED9"
                     txt = f"⏳ {int(time_left)}m left"
                 
-                fnb_val = row.get('fnb_total') or 0
+                fnb_val = float(row.get('fnb_total') or 0.0)
+                game_val = float(row.get('total') or 0.0)
+                
                 if fnb_val > 0:
                     fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>"
                 else:
@@ -116,7 +124,7 @@ with t1:
                     f"<h2 style='color:{t_col}; margin:0; padding:0; font-size:34px; font-weight:900; letter-spacing: 0.5px;'>{txt}</h2>"
                     f"</div>"
                     f"<div style='display:flex; gap:10px; justify-content: center; flex-wrap:wrap;'>"
-                    f"<span style='background:#2B3245; color:#98DED9; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🎮 ₹{row['total']:.0f}</span>"
+                    f"<span style='background:#2B3245; color:#98DED9; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🎮 ₹{game_val:.0f}</span>"
                     f"{fnb_html}"
                     f"</div>"
                     f"</div>"
@@ -146,8 +154,8 @@ with t1:
                 
                 f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key="t1_billed_hrs")
                 
-                game_bill = float(row['total'])
-                food_bill = float(row.get('fnb_total') or 0)
+                game_bill = float(row.get('total') or 0.0)
+                food_bill = float(row.get('fnb_total') or 0.0)
                 grand_total = game_bill + food_bill
                 
                 st.markdown(f"<div style='background:#161922; padding:10px; border-radius:8px;'><small>Gaming: ₹{game_bill:.0f}<br>F&B Tab: ₹{food_bill:.0f}</small><h3 style='color:#98DED9; margin:0;'>Total: ₹{grand_total:.0f}</h3></div><br>", unsafe_allow_html=True)
@@ -161,7 +169,8 @@ with t1:
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key="t1_extra_hrs")
                 if st.button("➕ Extend Session", key="t1_ext_btn"):
                     new_dur = float(row['duration']) + float(ext)
-                    new_total = float(row['total']) + float(get_price(SYSTEMS[row['system']], ext, 0))
+                    current_game_bill = float(row.get('total') or 0.0)
+                    new_total = current_game_bill + float(get_price(SYSTEMS[row['system']], ext, 0))
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -248,7 +257,7 @@ with t2:
                     if assign == "Add to Active Gamer" and gamer_id:
                         cur_tab = conn.table("sales").select("fnb_items, fnb_total").eq("id", gamer_id).execute().data[0]
                         old_i = cur_tab.get('fnb_items') or ""
-                        old_t = cur_tab.get('fnb_total') or 0
+                        old_t = float(cur_tab.get('fnb_total') or 0.0)
                         conn.table("sales").update({"fnb_items": f"{old_i} | {items_str}" if old_i else items_str, "fnb_total": float(old_t + tot_sell)}).eq("id", gamer_id).execute()
                     
                     st.session_state.fnb_cart = []; st.success("Order Processed!"); st.rerun()
@@ -449,6 +458,10 @@ with t4:
                 t_df = df[df['date_str'] == today_str]
                 comp = t_df[t_df['status'] == 'Completed']
                 
+                # Force numeric for safety before summing
+                comp['total'] = pd.to_numeric(comp['total'], errors='coerce').fillna(0.0)
+                t_df['total'] = pd.to_numeric(t_df['total'], errors='coerce').fillna(0.0)
+                
                 total_cash = comp[comp['method']=='Cash']['total'].sum() + fnb_cash
                 total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
                 grand_total = total_cash + total_upi
@@ -495,13 +508,14 @@ with t5:
             if not vdf.empty:
                 vdf['date_str'] = vdf['date'].str[:10]
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
+                comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
                 
                 cafe_res = conn.table("cafe_orders").select("*").in_("method", ["Cash", "UPI"]).execute()
                 cafe_direct_df = pd.DataFrame(cafe_res.data)
                 
                 if not cafe_direct_df.empty:
                     cafe_direct_df['date_str'] = cafe_direct_df['date'].str[:10]
-                    cafe_direct_df['total'] = cafe_direct_df['total_revenue']
+                    cafe_direct_df['total'] = pd.to_numeric(cafe_direct_df['total_revenue'], errors='coerce').fillna(0.0)
                     revenue_df = pd.concat([comp_df[['date_str', 'total']], cafe_direct_df[['date_str', 'total']]])
                 else:
                     revenue_df = comp_df[['date_str', 'total']]
@@ -551,6 +565,8 @@ with t5:
             sales_res = conn.table("cafe_orders").select("*").execute()
             sdf = pd.DataFrame(sales_res.data)
             if not sdf.empty:
+                sdf['total_cost'] = pd.to_numeric(sdf['total_cost'], errors='coerce').fillna(0.0)
+                sdf['profit'] = pd.to_numeric(sdf['profit'], errors='coerce').fillna(0.0)
                 p_col1, p_col2 = st.columns(2)
                 p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{sdf['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
                 p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{sdf['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
@@ -564,6 +580,7 @@ with t5:
                 exp_raw = conn.table("expenses").select("*").execute()
                 exp_df = pd.DataFrame(exp_raw.data)
                 if not exp_df.empty:
+                    exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
                     exp_summary = exp_df.groupby('expense_date')['amount'].sum().rename('Total Expenses').reset_index()
                     master_ledger = pd.merge(tot_inc, exp_summary, left_on='date_str', right_on='expense_date', how='outer').fillna(0)
                 else:
