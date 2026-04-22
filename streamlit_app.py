@@ -49,6 +49,7 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
+# Safe parser for Split Payments
 def get_cash_upi(df, amt_col='total'):
     cash_total = 0.0
     upi_total = 0.0
@@ -143,9 +144,7 @@ with t1:
                     f"</div>"
                     f"</div>"
                 )
-
-                with grid[i % 3]:
-                    st.markdown(card_html, unsafe_allow_html=True)
+                with grid[i % 3]: st.markdown(card_html, unsafe_allow_html=True)
 
     with col_op:
         st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
@@ -173,7 +172,6 @@ with t1:
                 calc_total = game_bill + food_bill
                 
                 st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
-                
                 final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key="t1_final_tot")
                 
                 pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t1_pay_method")
@@ -217,7 +215,6 @@ with t2:
                         grid = st.columns(4)
                         for i, (_, r) in enumerate(cat_items.iterrows()):
                             st.markdown("<div class='menu-btn'>", unsafe_allow_html=True)
-                            
                             track_stock = cat not in VENDOR_CATS
                             is_disabled = track_stock and r['stock_level'] <= 0
                             stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
@@ -344,14 +341,6 @@ with t2:
                             st.success(f"Successfully added {n_name}!")
                             st.rerun()
                         except Exception as e: st.error(f"Failed to add to database. Error: {e}")
-        
-        st.write("---")
-        st.write("### Low Stock Alerts (In-House Only)")
-        if not inv_df.empty:
-            trackable_only = inv_df[~inv_df['category'].isin(VENDOR_CATS)]
-            low = trackable_only[trackable_only['stock_level'] <= 5]
-            if not low.empty: st.error("🚨 These items need restocking immediately!")
-            st.dataframe(trackable_only[['item_name', 'category', 'stock_level', 'selling_price']], use_container_width=True, hide_index=True)
 
 # ==========================================
 # TAB 3: BOOKINGS, CART & QUEUE
@@ -464,18 +453,7 @@ with t4:
             df = pd.DataFrame(raw.data)
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
-            if not df.empty:
-                df['date_str'] = df['date'].str[:10] 
-                t_df = df[df['date_str'] == today_str]
-                comp = t_df[t_df['status'] == 'Completed']
-                comp['total'] = pd.to_numeric(comp['total'], errors='coerce').fillna(0.0)
-                
-                game_cash, game_upi = get_cash_upi(comp, 'total')
-                game_total = game_cash + game_upi
-                pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
-            else:
-                game_cash = game_upi = game_total = pending_floor = 0.0
-
+            # --- 1. The F&B Engine (All F&B Activity) ---
             try:
                 cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
                 cafe_df = pd.DataFrame(cafe_raw.data)
@@ -483,17 +461,38 @@ with t4:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
                     cafe_df['profit'] = pd.to_numeric(cafe_df['profit'], errors='coerce').fillna(0.0)
                     
-                    fnb_cash, fnb_upi = get_cash_upi(cafe_df, 'total_revenue')
-                    fnb_total = fnb_cash + fnb_upi
-                    fnb_profit = cafe_df['profit'].sum()
+                    # Total Gross F&B (Regardless of method)
+                    gross_fnb_sale = cafe_df['total_revenue'].sum()
+                    gross_fnb_profit = cafe_df['profit'].sum()
+                    
+                    # Direct Walk-in F&B (Exclude 'Tab' orders to avoid double counting physical cash)
+                    direct_fnb_df = cafe_df[cafe_df['method'] != 'Tab']
+                    direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
                 else:
-                    fnb_cash = fnb_upi = fnb_total = fnb_profit = 0.0
+                    gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
             except:
-                fnb_cash = fnb_upi = fnb_total = fnb_profit = 0.0
+                gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
 
-            total_drawer_cash = game_cash + fnb_cash
-            total_bank_upi = game_upi + fnb_upi
-            net_revenue = game_total + fnb_profit
+            # --- 2. The Gaming Engine (All Checkout Activity) ---
+            if not df.empty:
+                df['date_str'] = df['date'].str[:10] 
+                t_df = df[df['date_str'] == today_str]
+                comp = t_df[t_df['status'] == 'Completed'].copy()
+                
+                comp['total'] = pd.to_numeric(comp['total'], errors='coerce').fillna(0.0)
+                comp['fnb_total'] = pd.to_numeric(comp['fnb_total'], errors='coerce').fillna(0.0)
+                
+                checkout_cash, checkout_upi = get_cash_upi(comp, 'total')
+                pure_game_rev = (comp['total'] - comp['fnb_total']).sum()
+                
+                pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
+            else:
+                checkout_cash = checkout_upi = pure_game_rev = pending_floor = 0.0
+
+            # --- 3. The Master Math ---
+            total_drawer_cash = checkout_cash + direct_fnb_cash
+            total_bank_upi = checkout_upi + direct_fnb_upi
+            net_revenue = pure_game_rev + gross_fnb_profit
 
             st.write("### 💰 Master Revenue (Net)")
             c1, c2, c3, c4 = st.columns(4)
@@ -504,14 +503,14 @@ with t4:
             
             st.write("### 🎮 Gaming Breakdown")
             g1, g2, g3 = st.columns(3)
-            g1.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Total Gaming Revenue<h2 style='color:#98DED9'>₹{game_total:,.0f}</h2></div>", unsafe_allow_html=True)
-            g2.markdown(f"<div class='metric-box'>Gaming Cash<h2>₹{game_cash:,.0f}</h2></div>", unsafe_allow_html=True)
-            g3.markdown(f"<div class='metric-box'>Gaming UPI<h2>₹{game_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            g1.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Total Gaming Revenue<h2 style='color:#98DED9'>₹{pure_game_rev:,.0f}</h2></div>", unsafe_allow_html=True)
+            g2.markdown(f"<div class='metric-box'>Gaming Checkout Cash<h2>₹{checkout_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+            g3.markdown(f"<div class='metric-box'>Gaming Checkout UPI<h2>₹{checkout_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.write("### 🍔 F&B Breakdown")
             f1, f2 = st.columns(2)
-            f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{fnb_total:,.0f}</h2></div>", unsafe_allow_html=True)
-            f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
+            f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{gross_fnb_sale:,.0f}</h2></div>", unsafe_allow_html=True)
+            f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{gross_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.divider()
             st.write("### Export Data")
@@ -548,17 +547,27 @@ with t5:
                 vdf['date_str'] = vdf['date'].str[:10]
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
+                comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
+                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
+                
+                # Group pure gaming revenue by day
+                daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 
                 cafe_res = conn.table("cafe_orders").select("*").execute()
-                cafe_direct_df = pd.DataFrame(cafe_res.data)
+                cafe_all_df = pd.DataFrame(cafe_res.data)
                 
-                if not cafe_direct_df.empty:
-                    cafe_direct_df['date_str'] = cafe_direct_df['date'].str[:10]
-                    cafe_direct_df['total'] = pd.to_numeric(cafe_direct_df['total_revenue'], errors='coerce').fillna(0.0)
-                    revenue_df = pd.concat([comp_df[['date_str', 'total']], cafe_direct_df[['date_str', 'total']]])
+                if not cafe_all_df.empty:
+                    cafe_all_df['date_str'] = cafe_all_df['date'].str[:10]
+                    cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df['total_revenue'], errors='coerce').fillna(0.0)
+                    daily_fnb = cafe_all_df.groupby('date_str')['total_revenue'].sum().reset_index()
                 else:
-                    revenue_df = comp_df[['date_str', 'total']]
+                    daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue'])
 
+                # Merge Gaming and F&B for the Master Revenue calculations
+                master_ledger = pd.merge(daily_game, daily_fnb, on='date_str', how='outer').fillna(0.0)
+                master_ledger['Gross Income'] = master_ledger['pure_game'] + master_ledger['total_revenue']
+
+                revenue_df = master_ledger[['date_str', 'Gross Income']].rename(columns={'Gross Income': 'total'})
                 revenue_df['date_obj'] = pd.to_datetime(revenue_df['date_str'])
 
                 now_d = datetime.now(IST).date()
@@ -586,33 +595,23 @@ with t5:
                 
                 st.divider()
                 
-                st.write("### 🎮 Hardware Income Breakdown")
+                st.write("### 🎮 Hardware Income Breakdown (Pure Gaming)")
                 hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
                 comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
                 comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
                 
-                hw_life = comp_df.groupby('Category')['total'].sum().rename('Lifetime Gross')
-                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['total'].sum().rename('This Month')
-                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['total'].sum().rename('Last Month')
+                hw_life = comp_df.groupby('Category')['pure_game'].sum().rename('Lifetime Gross')
+                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['pure_game'].sum().rename('This Month')
+                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['pure_game'].sum().rename('Last Month')
                 
                 hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
                 st.dataframe(hw_summary, hide_index=True, use_container_width=True)
 
             st.divider()
 
-            st.write("### 🍔 F&B Financials")
-            if not cafe_direct_df.empty:
-                cafe_direct_df['total_cost'] = pd.to_numeric(cafe_direct_df['total_cost'], errors='coerce').fillna(0.0)
-                cafe_direct_df['profit'] = pd.to_numeric(cafe_direct_df['profit'], errors='coerce').fillna(0.0)
-                p_col1, p_col2 = st.columns(2)
-                p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{cafe_direct_df['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{cafe_direct_df['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-
-            st.divider()
-
             if not vdf.empty:
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
-                tot_inc = revenue_df.groupby('date_str')['total'].sum().rename('Gross Income').reset_index()
+                tot_inc = revenue_df[['date_str', 'total']].rename(columns={'total': 'Gross Income'})
                 
                 exp_raw = conn.table("expenses").select("*").execute()
                 exp_df = pd.DataFrame(exp_raw.data)
