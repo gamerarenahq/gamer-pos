@@ -36,7 +36,7 @@ if not st.session_state.auth:
         st.session_state.auth = True; st.rerun()
     st.stop()
 
-# --- 3. DATABASE SETUP ---
+# --- 3. DATABASE SETUP & HELPER FUNCS ---
 try: conn = st.connection("supabase", type=SupabaseConnection)
 except: st.error("Database Connection Error."); st.stop()
 
@@ -49,6 +49,25 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
+# Custom parser to safely handle Split Payments without breaking the database
+def get_cash_upi(df, amt_col='total'):
+    cash_total = 0.0
+    upi_total = 0.0
+    for _, r in df.iterrows():
+        m = str(r.get('method', ''))
+        try: val = float(r.get(amt_col, 0.0))
+        except: val = 0.0
+        
+        if m == 'Cash': cash_total += val
+        elif m == 'UPI': upi_total += val
+        elif m.startswith('Split|'):
+            try:
+                pts = m.split('|')
+                cash_total += float(pts[1])
+                upi_total += float(pts[2])
+            except: pass
+    return cash_total, upi_total
+
 inv_cols = ["id", "item_name", "category", "cost_price", "selling_price", "stock_level"]
 db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "entry_time", "status", "scheduled_date", "fnb_total", "fnb_items", "date"]
 
@@ -59,7 +78,6 @@ try:
     active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
-    # THE FIX: Safely force all total columns to be valid numbers so the app never crashes on a blank
     if not db_df.empty:
         db_df['total'] = pd.to_numeric(db_df['total'], errors='coerce').fillna(0.0)
         db_df['fnb_total'] = pd.to_numeric(db_df['fnb_total'], errors='coerce').fillna(0.0)
@@ -109,16 +127,13 @@ with t1:
                 fnb_val = float(row.get('fnb_total') or 0.0)
                 game_val = float(row.get('total') or 0.0)
                 
-                if fnb_val > 0:
-                    fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>"
-                else:
-                    fnb_html = ""
+                fnb_html = f"<span style='background:#42201D; color:#FF754C; padding:6px 14px; border-radius:8px; font-size:14px; font-weight:700; box-shadow: 0 2px 4px rgba(0,0,0,0.2);'>🍔 ₹{fnb_val:.0f}</span>" if fnb_val > 0 else ""
 
                 card_html = (
                     f"<div style='background:{bg_col}; border:1px solid #2D3446; border-top:4px solid {b_col}; border-radius:14px; padding:20px; margin-bottom:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>"
                     f"<div style='display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #2D3446; padding-bottom: 10px; margin-bottom: 15px;'>"
                     f"<span style='color:white; font-size:18px; font-weight:800; letter-spacing: 0.5px;'>{row['system']}</span>"
-                    f"<span style='color:#9CA3AF; font-size:14px; font-weight:600;'>{row['customer']}</span>"
+                    f"<span style='color:#9CA3AF; font-size:14px; font-weight:600;'>{row['customer']} • <span style='color:#98DED9;'>In: {row['entry_time']}</span></span>"
                     f"</div>"
                     f"<div style='text-align: center; margin-bottom: 15px;'>"
                     f"<h2 style='color:{t_col}; margin:0; padding:0; font-size:34px; font-weight:900; letter-spacing: 0.5px;'>{txt}</h2>"
@@ -156,13 +171,24 @@ with t1:
                 
                 game_bill = float(row.get('total') or 0.0)
                 food_bill = float(row.get('fnb_total') or 0.0)
-                grand_total = game_bill + food_bill
+                calc_total = game_bill + food_bill
                 
-                st.markdown(f"<div style='background:#161922; padding:10px; border-radius:8px;'><small>Gaming: ₹{game_bill:.0f}<br>F&B Tab: ₹{food_bill:.0f}</small><h3 style='color:#98DED9; margin:0;'>Total: ₹{grand_total:.0f}</h3></div><br>", unsafe_allow_html=True)
+                st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key="t1_pay_method")
+                # New Editable Total!
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key="t1_final_tot")
+                
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t1_pay_method")
+                
+                final_method_str = pay
+                if pay == "Split Payment":
+                    st.caption("How much was paid in Cash?")
+                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key="t1_split_c")
+                    st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
+                    final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
+                
                 if st.button("🛑 Collect & Close", type="primary", key="t1_close_btn"):
-                    conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(grand_total)}).eq("id", int(row['id'])).execute()
+                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
@@ -232,7 +258,7 @@ with t2:
                 
                 assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"], key="t2_assign")
                 gamer_id = None
-                direct_pay_method = None
+                final_fnb_pay = None
                 
                 if assign == "Add to Active Gamer":
                     if not active_gamers.empty:
@@ -240,7 +266,12 @@ with t2:
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 else:
-                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="t2_walkin_pay")
+                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t2_walkin_pay")
+                    final_fnb_pay = direct_pay_method
+                    if direct_pay_method == "Split Payment":
+                        walk_split_c = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(tot_sell), value=float(tot_sell), step=10.0, key="t2_wsc")
+                        st.info(f"💳 Remaining UPI Portion: **₹{tot_sell - walk_split_c:.0f}**")
+                        final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
                     for item in st.session_state.fnb_cart:
@@ -251,7 +282,7 @@ with t2:
                     conn.table("cafe_orders").insert({
                         "date": datetime.now(IST).strftime('%Y-%m-%d'), "items": items_str, 
                         "total_revenue": float(tot_sell), "total_cost": float(tot_cost), "profit": float(tot_sell - tot_cost),
-                        "method": "Tab" if assign == "Add to Active Gamer" else direct_pay_method
+                        "method": "Tab" if assign == "Add to Active Gamer" else final_fnb_pay
                     }).execute()
                     
                     if assign == "Add to Active Gamer" and gamer_id:
@@ -306,20 +337,15 @@ with t2:
                 
                 if st.form_submit_button("Add to Database", use_container_width=True):
                     final_cat = n_cat_new.strip() if n_cat_sel == "➕ Create New Category" else n_cat_sel
-                    
-                    if not n_name.strip():
-                        st.error("⚠️ Please enter a name for the item.")
-                    elif not final_cat:
-                        st.error("⚠️ Please select or enter a category.")
-                    elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values:
-                        st.error(f"⚠️ '{n_name}' already exists in your inventory!")
+                    if not n_name.strip(): st.error("⚠️ Please enter a name for the item.")
+                    elif not final_cat: st.error("⚠️ Please select or enter a category.")
+                    elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values: st.error(f"⚠️ '{n_name}' already exists in your inventory!")
                     else:
                         try:
                             conn.table("inventory").insert({"item_name": n_name.strip(), "category": final_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
                             st.success(f"Successfully added {n_name}!")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to add to database. Error: {e}")
+                        except Exception as e: st.error(f"Failed to add to database. Error: {e}")
         
         st.write("---")
         st.write("### Low Stock Alerts (In-House Only)")
@@ -347,7 +373,6 @@ with t3:
                 b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"t3_wt_{st.session_state.form_reset}")
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Active"; btn_txt = "🚀 Start Session Now"
-                st.info(f"Session will be logged for today at {time_str}")
             else:
                 d_col, t_col = st.columns(2)
                 b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"t3_d_{st.session_state.form_reset}")
@@ -356,7 +381,6 @@ with t3:
                 sch_date = b_date.strftime('%Y-%m-%d')
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"; btn_txt = f"📅 Confirm Reservation"
-                st.info(f"Slot will be reserved for {b_date.strftime('%b %d')} at {time_str}")
 
         st.subheader("2. Add Hardware")
         with st.container(border=True):
@@ -440,48 +464,69 @@ with t4:
         try:
             raw = conn.table("sales").select("*").execute()
             df = pd.DataFrame(raw.data)
-            
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
-            try:
-                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
-                cafe_df = pd.DataFrame(cafe_raw.data)
-                today_fnb = cafe_df['total_revenue'].sum() if not cafe_df.empty else 0
-                today_fnb_profit = cafe_df['profit'].sum() if not cafe_df.empty else 0
-                fnb_cash = cafe_df[cafe_df['method'] == 'Cash']['total_revenue'].sum() if not cafe_df.empty else 0
-                fnb_upi = cafe_df[cafe_df['method'] == 'UPI']['total_revenue'].sum() if not cafe_df.empty else 0
-            except:
-                today_fnb = 0; today_fnb_profit = 0; fnb_cash = 0; fnb_upi = 0
-
             if not df.empty:
                 df['date_str'] = df['date'].str[:10] 
                 t_df = df[df['date_str'] == today_str]
                 comp = t_df[t_df['status'] == 'Completed']
-                
-                # Force numeric for safety before summing
                 comp['total'] = pd.to_numeric(comp['total'], errors='coerce').fillna(0.0)
-                t_df['total'] = pd.to_numeric(t_df['total'], errors='coerce').fillna(0.0)
                 
-                total_cash = comp[comp['method']=='Cash']['total'].sum() + fnb_cash
-                total_upi = comp[comp['method']!='Cash']['total'].sum() + fnb_upi
-                grand_total = total_cash + total_upi
-                
-                m1, m2, m3, m4, m5, m6 = st.columns(6)
-                m1.markdown(f"<div class='metric-box'>Cash Collected<h2>₹{total_cash:,.0f}</h2></div>", unsafe_allow_html=True)
-                m2.markdown(f"<div class='metric-box'>UPI Collected<h2>₹{total_upi:,.0f}</h2></div>", unsafe_allow_html=True)
-                m3.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue<h2 style='color:#4F46E5'>₹{grand_total:,.0f}</h2></div>", unsafe_allow_html=True)
-                m4.markdown(f"<div class='metric-box' style='border-color:#34D399'>Today's F&B Sale<h2 style='color:#34D399'>₹{today_fnb:,.0f}</h2></div>", unsafe_allow_html=True)
-                m5.markdown(f"<div class='metric-box' style='border-color:#10B981'>Today's F&B Profit<h2 style='color:#10B981'>₹{today_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
-                m6.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{t_df[t_df['status']=='Active']['total'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                
-                st.divider()
-                st.write("### Export Data")
-                d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
-                if len(d_range) == 2:
-                    s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
-                    f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
-                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
-        except: st.error("Error loading summary.")
+                game_cash, game_upi = get_cash_upi(comp, 'total')
+                game_total = game_cash + game_upi
+                pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
+            else:
+                game_cash = game_upi = game_total = pending_floor = 0.0
+
+            try:
+                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
+                cafe_df = pd.DataFrame(cafe_raw.data)
+                if not cafe_df.empty:
+                    cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
+                    cafe_df['profit'] = pd.to_numeric(cafe_df['profit'], errors='coerce').fillna(0.0)
+                    cafe_df['total_cost'] = pd.to_numeric(cafe_df['total_cost'], errors='coerce').fillna(0.0)
+                    
+                    fnb_cash, fnb_upi = get_cash_upi(cafe_df, 'total_revenue')
+                    fnb_total = fnb_cash + fnb_upi
+                    fnb_profit = cafe_df['profit'].sum()
+                    fnb_cost = cafe_df['total_cost'].sum()
+                else:
+                    fnb_cash = fnb_upi = fnb_total = fnb_profit = fnb_cost = 0.0
+            except:
+                fnb_cash = fnb_upi = fnb_total = fnb_profit = fnb_cost = 0.0
+
+            # The exact math requested by ownership
+            total_drawer_cash = game_cash + fnb_cash
+            total_bank_upi = game_upi + fnb_upi
+            net_revenue = game_total + fnb_profit
+
+            st.write("### 💰 Master Revenue (Net)")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Net Rev (Game + F&B Profit)<h2 style='color:#4F46E5'>₹{net_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            c4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
+            
+            st.write("### 🎮 Gaming Breakdown")
+            g1, g2, g3 = st.columns(3)
+            g1.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Total Gaming Revenue<h2 style='color:#98DED9'>₹{game_total:,.0f}</h2></div>", unsafe_allow_html=True)
+            g2.markdown(f"<div class='metric-box'>Gaming Cash<h2>₹{game_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+            g3.markdown(f"<div class='metric-box'>Gaming UPI<h2>₹{game_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            
+            st.write("### 🍔 F&B Breakdown")
+            f1, f2, f3 = st.columns(3)
+            f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{fnb_total:,.0f}</h2></div>", unsafe_allow_html=True)
+            f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
+            f3.markdown(f"<div class='metric-box' style='border-color:#EF4444'>Hunger Monkey Dues (Cost)<h2 style='color:#EF4444'>₹{fnb_cost:,.0f}</h2></div>", unsafe_allow_html=True)
+            
+            st.divider()
+            st.write("### Export Data")
+            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
+            if len(d_range) == 2:
+                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
+                f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
+                st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
+        except Exception as e: st.error(f"Error loading summary. {e}")
 
 # ==========================================
 # TAB 5: MASTER VAULT
@@ -510,7 +555,8 @@ with t5:
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
                 
-                cafe_res = conn.table("cafe_orders").select("*").in_("method", ["Cash", "UPI"]).execute()
+                # Fetch F&B to add to the main historical chart
+                cafe_res = conn.table("cafe_orders").select("*").execute()
                 cafe_direct_df = pd.DataFrame(cafe_res.data)
                 
                 if not cafe_direct_df.empty:
@@ -562,14 +608,12 @@ with t5:
             st.divider()
 
             st.write("### 🍔 F&B Financials")
-            sales_res = conn.table("cafe_orders").select("*").execute()
-            sdf = pd.DataFrame(sales_res.data)
-            if not sdf.empty:
-                sdf['total_cost'] = pd.to_numeric(sdf['total_cost'], errors='coerce').fillna(0.0)
-                sdf['profit'] = pd.to_numeric(sdf['profit'], errors='coerce').fillna(0.0)
+            if not cafe_direct_df.empty:
+                cafe_direct_df['total_cost'] = pd.to_numeric(cafe_direct_df['total_cost'], errors='coerce').fillna(0.0)
+                cafe_direct_df['profit'] = pd.to_numeric(cafe_direct_df['profit'], errors='coerce').fillna(0.0)
                 p_col1, p_col2 = st.columns(2)
-                p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{sdf['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
-                p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{sdf['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                p_col1.markdown(f"<div class='metric-box' style='border-color:#EF4444'><h4>Total F&B Cost</h4><h2 style='color:#EF4444'>₹{cafe_direct_df['total_cost'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
+                p_col2.markdown(f"<div class='metric-box'><h4>Total Net F&B Profit</h4><h2 style='color:#34D399'>₹{cafe_direct_df['profit'].sum():,.0f}</h2></div>", unsafe_allow_html=True)
 
             st.divider()
 
