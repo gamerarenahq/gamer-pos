@@ -483,6 +483,8 @@ with t4:
                 comp['fnb_total'] = pd.to_numeric(comp['fnb_total'], errors='coerce').fillna(0.0)
                 
                 checkout_cash, checkout_upi = get_cash_upi(comp, 'total')
+                
+                # The Fix: Pure Gaming separates the Game cost from the F&B tabs completely
                 pure_game_rev = (comp['total'] - comp['fnb_total']).sum()
                 
                 pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
@@ -490,22 +492,22 @@ with t4:
                 checkout_cash = checkout_upi = pure_game_rev = pending_floor = 0.0
 
             # --- 3. The Master Math ---
+            # Total Cash/UPI physical money in the business
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
-            net_revenue = pure_game_rev + gross_fnb_profit
+            
+            # Master Revenue: Pure Game Sale + Total F&B Sale
+            total_revenue = pure_game_rev + gross_fnb_sale
 
-            st.write("### 💰 Master Revenue (Net)")
+            st.write("### 💰 Master Revenue")
             c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Net Rev (Game + F&B Profit)<h2 style='color:#4F46E5'>₹{net_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
+            c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue (Game + F&B)<h2 style='color:#4F46E5'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             c4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.write("### 🎮 Gaming Breakdown")
-            g1, g2, g3 = st.columns(3)
-            g1.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Total Gaming Revenue<h2 style='color:#98DED9'>₹{pure_game_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-            g2.markdown(f"<div class='metric-box'>Gaming Checkout Cash<h2>₹{checkout_cash:,.0f}</h2></div>", unsafe_allow_html=True)
-            g3.markdown(f"<div class='metric-box'>Gaming Checkout UPI<h2>₹{checkout_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Pure Gaming Sale (Hardware Time Only)<h2 style='color:#98DED9'>₹{pure_game_rev:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.write("### 🍔 F&B Breakdown")
             f1, f2 = st.columns(2)
@@ -548,9 +550,9 @@ with t5:
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
                 comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
-                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
                 
-                # Group pure gaming revenue by day
+                # Vault uses Pure Game Math so hardware stats are accurate
+                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 
                 cafe_res = conn.table("cafe_orders").select("*").execute()
@@ -563,7 +565,6 @@ with t5:
                 else:
                     daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue'])
 
-                # Merge Gaming and F&B for the Master Revenue calculations
                 master_ledger = pd.merge(daily_game, daily_fnb, on='date_str', how='outer').fillna(0.0)
                 master_ledger['Gross Income'] = master_ledger['pure_game'] + master_ledger['total_revenue']
 
