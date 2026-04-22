@@ -49,7 +49,6 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
-# Custom parser to safely handle Split Payments without breaking the database
 def get_cash_upi(df, amt_col='total'):
     cash_total = 0.0
     upi_total = 0.0
@@ -175,7 +174,6 @@ with t1:
                 
                 st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
                 
-                # New Editable Total!
                 final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key="t1_final_tot")
                 
                 pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t1_pay_method")
@@ -484,18 +482,15 @@ with t4:
                 if not cafe_df.empty:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
                     cafe_df['profit'] = pd.to_numeric(cafe_df['profit'], errors='coerce').fillna(0.0)
-                    cafe_df['total_cost'] = pd.to_numeric(cafe_df['total_cost'], errors='coerce').fillna(0.0)
                     
                     fnb_cash, fnb_upi = get_cash_upi(cafe_df, 'total_revenue')
                     fnb_total = fnb_cash + fnb_upi
                     fnb_profit = cafe_df['profit'].sum()
-                    fnb_cost = cafe_df['total_cost'].sum()
                 else:
-                    fnb_cash = fnb_upi = fnb_total = fnb_profit = fnb_cost = 0.0
+                    fnb_cash = fnb_upi = fnb_total = fnb_profit = 0.0
             except:
-                fnb_cash = fnb_upi = fnb_total = fnb_profit = fnb_cost = 0.0
+                fnb_cash = fnb_upi = fnb_total = fnb_profit = 0.0
 
-            # The exact math requested by ownership
             total_drawer_cash = game_cash + fnb_cash
             total_bank_upi = game_upi + fnb_upi
             net_revenue = game_total + fnb_profit
@@ -514,10 +509,9 @@ with t4:
             g3.markdown(f"<div class='metric-box'>Gaming UPI<h2>₹{game_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.write("### 🍔 F&B Breakdown")
-            f1, f2, f3 = st.columns(3)
+            f1, f2 = st.columns(2)
             f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{fnb_total:,.0f}</h2></div>", unsafe_allow_html=True)
             f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
-            f3.markdown(f"<div class='metric-box' style='border-color:#EF4444'>Hunger Monkey Dues (Cost)<h2 style='color:#EF4444'>₹{fnb_cost:,.0f}</h2></div>", unsafe_allow_html=True)
             
             st.divider()
             st.write("### Export Data")
@@ -555,7 +549,6 @@ with t5:
                 comp_df = vdf[vdf['status'] == 'Completed'].copy()
                 comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
                 
-                # Fetch F&B to add to the main historical chart
                 cafe_res = conn.table("cafe_orders").select("*").execute()
                 cafe_direct_df = pd.DataFrame(cafe_res.data)
                 
