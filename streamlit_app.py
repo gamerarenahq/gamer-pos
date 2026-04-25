@@ -49,7 +49,6 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
-# Safe parser for Split Payments
 def get_cash_upi(df, amt_col='total'):
     cash_total = 0.0
     upi_total = 0.0
@@ -154,7 +153,10 @@ with t1:
             sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t1_gamer_sel")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             
-            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key="t1_op_mode")
+            # Use Gamer ID to completely reset state when a new gamer is selected
+            g_id = str(row['id'])
+            
+            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key=f"t1_op_mode_{g_id}")
             
             if op_mode == "Smart Checkout":
                 try: played_mins = int((datetime.now(IST) - pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)).total_seconds() / 60.0)
@@ -165,31 +167,39 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key="t1_billed_hrs")
+                # Dynamic Key 1: Ties the box to the specific gamer so it resets on checkout
+                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{g_id}")
                 
-                game_bill = float(row.get('total') or 0.0)
+                # Auto-Calculate new Gaming Bill if they change the hours!
+                orig_dur = float(row['duration'])
+                orig_tot = float(row.get('total') or 0.0)
+                dyn_game_bill = (orig_tot / orig_dur) * f_dur if orig_dur > 0 else orig_tot
+                
                 food_bill = float(row.get('fnb_total') or 0.0)
-                calc_total = game_bill + food_bill
+                calc_total = dyn_game_bill + food_bill
                 
-                st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
-                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key="t1_final_tot")
+                st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t1_pay_method")
+                # Dynamic Key 2: Including f_dur forces the Total box to auto-update when you click + or - on Billed Hrs!
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_ftot_{g_id}_{f_dur}")
+                
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_pay_{g_id}")
                 
                 final_method_str = pay
                 if pay == "Split Payment":
                     st.caption("How much was paid in Cash?")
-                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key="t1_split_c")
+                    # Dynamic Key 3: Auto-updates the default split cash if Final Total changes
+                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
                     st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
                     final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
                 
-                if st.button("🛑 Collect & Close", type="primary", key="t1_close_btn"):
+                if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
                     conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
-                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key="t1_extra_hrs")
-                if st.button("➕ Extend Session", key="t1_ext_btn"):
+                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{g_id}")
+                if st.button("➕ Extend Session", key=f"t1_ext_btn_{g_id}"):
                     new_dur = float(row['duration']) + float(ext)
                     current_game_bill = float(row.get('total') or 0.0)
                     new_total = current_game_bill + float(get_price(SYSTEMS[row['system']], ext, 0))
@@ -264,7 +274,7 @@ with t2:
                     direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t2_walkin_pay")
                     final_fnb_pay = direct_pay_method
                     if direct_pay_method == "Split Payment":
-                        walk_split_c = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(tot_sell), value=float(tot_sell), step=10.0, key="t2_wsc")
+                        walk_split_c = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(tot_sell), value=float(tot_sell)/2, step=10.0, key="t2_wsc")
                         st.info(f"💳 Remaining UPI Portion: **₹{tot_sell - walk_split_c:.0f}**")
                         final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
@@ -453,7 +463,6 @@ with t4:
             df = pd.DataFrame(raw.data)
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
-            # --- 1. The F&B Engine (All F&B Activity) ---
             try:
                 cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
                 cafe_df = pd.DataFrame(cafe_raw.data)
@@ -461,11 +470,9 @@ with t4:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
                     cafe_df['profit'] = pd.to_numeric(cafe_df['profit'], errors='coerce').fillna(0.0)
                     
-                    # Total Gross F&B (Regardless of method)
                     gross_fnb_sale = cafe_df['total_revenue'].sum()
                     gross_fnb_profit = cafe_df['profit'].sum()
                     
-                    # Direct Walk-in F&B (Exclude 'Tab' orders to avoid double counting physical cash)
                     direct_fnb_df = cafe_df[cafe_df['method'] != 'Tab']
                     direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
                 else:
@@ -473,7 +480,6 @@ with t4:
             except:
                 gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
 
-            # --- 2. The Gaming Engine (All Checkout Activity) ---
             if not df.empty:
                 df['date_str'] = df['date'].str[:10] 
                 t_df = df[df['date_str'] == today_str]
@@ -483,20 +489,14 @@ with t4:
                 comp['fnb_total'] = pd.to_numeric(comp['fnb_total'], errors='coerce').fillna(0.0)
                 
                 checkout_cash, checkout_upi = get_cash_upi(comp, 'total')
-                
-                # The Fix: Pure Gaming separates the Game cost from the F&B tabs completely
                 pure_game_rev = (comp['total'] - comp['fnb_total']).sum()
                 
                 pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
             else:
                 checkout_cash = checkout_upi = pure_game_rev = pending_floor = 0.0
 
-            # --- 3. The Master Math ---
-            # Total Cash/UPI physical money in the business
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
-            
-            # Master Revenue: Pure Game Sale + Total F&B Sale
             total_revenue = pure_game_rev + gross_fnb_sale
 
             st.write("### 💰 Master Revenue")
@@ -551,7 +551,6 @@ with t5:
                 comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
                 comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
                 
-                # Vault uses Pure Game Math so hardware stats are accurate
                 comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 
