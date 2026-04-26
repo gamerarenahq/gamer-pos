@@ -152,8 +152,6 @@ with t1:
             active_gamers['lbl'] = active_gamers['customer'] + " | " + active_gamers['system']
             sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t1_gamer_sel")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
-            
-            # Use Gamer ID to completely reset state when a new gamer is selected
             g_id = str(row['id'])
             
             op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key=f"t1_op_mode_{g_id}")
@@ -167,34 +165,19 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                # Dynamic Key 1: Ties the box to the specific gamer so it resets on checkout
                 f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{g_id}")
                 
-                # Auto-Calculate new Gaming Bill if they change the hours!
-                orig_dur = float(row['duration'])
-                orig_tot = float(row.get('total') or 0.0)
-                dyn_game_bill = (orig_tot / orig_dur) * f_dur if orig_dur > 0 else orig_tot
-                
+                game_bill = float(row.get('total') or 0.0)
                 food_bill = float(row.get('fnb_total') or 0.0)
-                calc_total = dyn_game_bill + food_bill
+                calc_total = game_bill + food_bill
                 
-                st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+                st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_final_tot_{g_id}_{f_dur}")
                 
-                # Dynamic Key 2: Including f_dur forces the Total box to auto-update when you click + or - on Billed Hrs!
-                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_ftot_{g_id}_{f_dur}")
-                
-                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_pay_{g_id}")
-                
-                final_method_str = pay
-                if pay == "Split Payment":
-                    st.caption("How much was paid in Cash?")
-                    # Dynamic Key 3: Auto-updates the default split cash if Final Total changes
-                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
-                    st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
-                    final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
+                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key=f"t1_pay_{g_id}")
                 
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
-                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
+                    conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
@@ -271,12 +254,8 @@ with t2:
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 else:
-                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t2_walkin_pay")
+                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="t2_walkin_pay")
                     final_fnb_pay = direct_pay_method
-                    if direct_pay_method == "Split Payment":
-                        walk_split_c = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(tot_sell), value=float(tot_sell)/2, step=10.0, key="t2_wsc")
-                        st.info(f"💳 Remaining UPI Portion: **₹{tot_sell - walk_split_c:.0f}**")
-                        final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
                     for item in st.session_state.fnb_cart:
@@ -514,6 +493,39 @@ with t4:
             f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{gross_fnb_sale:,.0f}</h2></div>", unsafe_allow_html=True)
             f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{gross_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
             
+            # --- THE NEW FEATURE: CUSTOM HARDWARE BREAKDOWN ---
+            st.divider()
+            st.write("### 📅 Custom Hardware Breakdown")
+            d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_hw_range")
+            if len(d_range_hw) == 2:
+                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range_hw]
+                if not df.empty:
+                    hw_filter = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt) & (df['status'] == 'Completed')].copy()
+                    
+                    if not hw_filter.empty:
+                        hw_filter['total'] = pd.to_numeric(hw_filter['total'], errors='coerce').fillna(0.0)
+                        hw_filter['fnb_total'] = pd.to_numeric(hw_filter['fnb_total'], errors='coerce').fillna(0.0)
+                        hw_filter['pure_game'] = hw_filter['total'] - hw_filter['fnb_total']
+                        
+                        hw_map = {"PS1":"PlayStation", "PS2":"PlayStation", "PS3":"PlayStation", 
+                                  "PC1":"PC", "PC2":"PC", "SIM1":"Simulator"}
+                        hw_filter['Category'] = hw_filter['system'].map(hw_map).fillna(hw_filter['system'])
+                        
+                        hw_group = hw_filter.groupby('Category')['pure_game'].sum()
+                        
+                        ps_rev = hw_group.get('PlayStation', 0.0)
+                        pc_rev = hw_group.get('PC', 0.0)
+                        sim_rev = hw_group.get('Simulator', 0.0)
+                        
+                        h1, h2, h3 = st.columns(3)
+                        h1.markdown(f"<div class='metric-box' style='border-color:#0070D1'>PlayStation (PS1-PS3)<h2 style='color:#0070D1'>₹{ps_rev:,.0f}</h2></div>", unsafe_allow_html=True)
+                        h2.markdown(f"<div class='metric-box' style='border-color:#10B981'>PC (PC1-PC2)<h2 style='color:#10B981'>₹{pc_rev:,.0f}</h2></div>", unsafe_allow_html=True)
+                        h3.markdown(f"<div class='metric-box' style='border-color:#F59E0B'>Simulator (SIM1)<h2 style='color:#F59E0B'>₹{sim_rev:,.0f}</h2></div>", unsafe_allow_html=True)
+                    else:
+                        st.info("No completed gaming sessions found in this date range.")
+                else:
+                    st.info("No sales data available to analyze.")
+
             st.divider()
             st.write("### Export Data")
             d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
@@ -594,20 +606,6 @@ with t5:
                 c5.metric("Last Week", f"₹{lw:,.0f}")
                 
                 st.divider()
-                
-                st.write("### 🎮 Hardware Income Breakdown (Pure Gaming)")
-                hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
-                comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
-                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
-                
-                hw_life = comp_df.groupby('Category')['pure_game'].sum().rename('Lifetime Gross')
-                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['pure_game'].sum().rename('This Month')
-                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['pure_game'].sum().rename('Last Month')
-                
-                hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
-                st.dataframe(hw_summary, hide_index=True, use_container_width=True)
-
-            st.divider()
 
             if not vdf.empty:
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
