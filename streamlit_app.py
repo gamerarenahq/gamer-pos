@@ -49,6 +49,17 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
     return 0
 
+# THE FIX: Reverse engineers the controller count so 0.5 hours perfectly charges ₹100 instead of ₹75
+def get_extra_ctrls(cat, orig_dur, orig_tot):
+    if cat != "PS5": return 0
+    try:
+        base_cost = int(orig_dur) * 150 + (1 if orig_dur % 1 != 0 else 0) * 100
+        ctrl_mult = int(orig_dur) * 100 + (1 if orig_dur % 1 != 0 else 0) * 100
+        if ctrl_mult == 0: return 0
+        extra = round((orig_tot - base_cost) / ctrl_mult)
+        return max(0, int(extra))
+    except: return 0
+
 def get_cash_upi(df, amt_col='total'):
     cash_total = 0.0
     upi_total = 0.0
@@ -56,7 +67,6 @@ def get_cash_upi(df, amt_col='total'):
         m = str(r.get('method', ''))
         try: val = float(r.get(amt_col, 0.0))
         except: val = 0.0
-        
         if m == 'Cash': cash_total += val
         elif m == 'UPI': upi_total += val
         elif m.startswith('Split|'):
@@ -77,14 +87,21 @@ try:
     active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
+    today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
+    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").like("date", f"{today_str_query}%").execute()
+    tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
+    
     if not db_df.empty:
         db_df['total'] = pd.to_numeric(db_df['total'], errors='coerce').fillna(0.0)
         db_df['fnb_total'] = pd.to_numeric(db_df['fnb_total'], errors='coerce').fillna(0.0)
+    if not tab_df.empty:
+        tab_df['total'] = pd.to_numeric(tab_df['total'], errors='coerce').fillna(0.0)
         
 except Exception as e:
     st.error(f"Syncing Database... {e}")
     inv_df = pd.DataFrame(columns=inv_cols)
     db_df = pd.DataFrame(columns=db_cols)
+    tab_df = pd.DataFrame(columns=db_cols)
 
 # --- 4. TABS LAYOUT ---
 t1, t2, t3, t4, t5 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings & Queue", "📊 Daily Snapshot", "🧠 Master Vault"])
@@ -152,8 +169,6 @@ with t1:
             active_gamers['lbl'] = active_gamers['customer'] + " | " + active_gamers['system']
             sel = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t1_gamer_sel")
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
-            
-            # Use Gamer ID to completely reset state when a new gamer is selected
             g_id = str(row['id'])
             
             op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key=f"t1_op_mode_{g_id}")
@@ -167,34 +182,49 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                # Dynamic Key 1: Ties the box to the specific gamer so it resets on checkout
                 f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{g_id}")
                 
-                # Auto-Calculate new Gaming Bill if they change the hours!
                 orig_dur = float(row['duration'])
                 orig_tot = float(row.get('total') or 0.0)
-                dyn_game_bill = (orig_tot / orig_dur) * f_dur if orig_dur > 0 else orig_tot
+                sys_cat = SYSTEMS.get(row['system'], 'PC')
                 
+                extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
+                dyn_game_bill = float(get_price(sys_cat, f_dur, extra_c))
                 food_bill = float(row.get('fnb_total') or 0.0)
-                calc_total = dyn_game_bill + food_bill
                 
-                st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+                # Check for unpaid past sessions (System Switching feature)
+                past_tabs = tab_df[tab_df['customer'] == row['customer']] if not tab_df.empty else pd.DataFrame()
+                past_tab_amt = past_tabs['total'].sum() if not past_tabs.empty else 0.0
+
+                calc_total = dyn_game_bill + food_bill + past_tab_amt
                 
-                # Dynamic Key 2: Including f_dur forces the Total box to auto-update when you click + or - on Billed Hrs!
-                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_ftot_{g_id}_{f_dur}")
+                if past_tab_amt > 0:
+                    st.markdown(f"<small style='color:#9CA3AF;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></small>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_final_tot_{g_id}_{f_dur}")
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_pay_{g_id}")
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment", "Hold on Tab (Switching PC/PS5)"], horizontal=True, key=f"t1_pay_{g_id}")
                 
                 final_method_str = pay
                 if pay == "Split Payment":
                     st.caption("How much was paid in Cash?")
-                    # Dynamic Key 3: Auto-updates the default split cash if Final Total changes
                     split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
                     st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
                     final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
+                elif pay == "Hold on Tab (Switching PC/PS5)":
+                    final_method_str = "Master Tab"
                 
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
-                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
+                    if final_method_str != "Master Tab" and not past_tabs.empty:
+                        for past_id in past_tabs['id']:
+                            conn.table("sales").update({"method": final_method_str}).eq("id", int(past_id)).execute()
+                    
+                    # Deduct the past tab amount from this specific row so the drawer balances perfectly
+                    current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
+                    
+                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(current_row_final)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
