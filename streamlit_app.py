@@ -67,6 +67,11 @@ def get_cash_upi(df, amt_col='total'):
             except: pass
     return cash_total, upi_total
 
+# Helper for WhatsApp Date Formatting
+def get_ordinal(n):
+    if 11 <= (n % 100) <= 13: return str(n) + 'th'
+    return str(n) + ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
+
 inv_cols = ["id", "item_name", "category", "cost_price", "selling_price", "stock_level"]
 db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "entry_time", "status", "scheduled_date", "fnb_total", "fnb_items", "date"]
 
@@ -174,10 +179,17 @@ with t1:
                 st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
                 final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_final_tot_{g_id}_{f_dur}")
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI"], horizontal=True, key=f"t1_pay_{g_id}")
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_pay_{g_id}")
+                
+                final_method_str = pay
+                if pay == "Split Payment":
+                    st.caption("How much was paid in Cash?")
+                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
+                    st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
+                    final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
                 
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
-                    conn.table("sales").update({"status": "Completed", "method": pay, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
+                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
@@ -254,8 +266,12 @@ with t2:
                         gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
                     else: st.warning("No active gamers.")
                 else:
-                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI"], horizontal=True, key="t2_walkin_pay")
+                    direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t2_walkin_pay")
                     final_fnb_pay = direct_pay_method
+                    if direct_pay_method == "Split Payment":
+                        walk_split_c = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(tot_sell), value=float(tot_sell)/2, step=10.0, key="t2_wsc")
+                        st.info(f"💳 Remaining UPI Portion: **₹{tot_sell - walk_split_c:.0f}**")
+                        final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
                     for item in st.session_state.fnb_cart:
@@ -471,16 +487,27 @@ with t4:
                 pure_game_rev = (comp['total'] - comp['fnb_total']).sum()
                 
                 pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
+                
+                # Setup for WhatsApp Today Hardware Breakdown
+                comp['pure_game'] = comp['total'] - comp['fnb_total']
+                hw_map_wa = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"SIM"}
+                comp['Category'] = comp['system'].map(hw_map_wa).fillna(comp['system'])
+                today_hw_group = comp.groupby('Category')['pure_game'].sum()
+                ps_wa = today_hw_group.get('PS5', 0.0)
+                pc_wa = today_hw_group.get('PC', 0.0)
+                sim_wa = today_hw_group.get('SIM', 0.0)
+                
             else:
                 checkout_cash = checkout_upi = pure_game_rev = pending_floor = 0.0
+                ps_wa = pc_wa = sim_wa = 0.0
 
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
-            total_revenue = pure_game_rev + gross_fnb_sale
+            total_revenue = pure_game_rev + gross_fnb_profit
 
             st.write("### 💰 Master Revenue")
             c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Total Revenue (Game + F&B)<h2 style='color:#4F46E5'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
+            c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Net Revenue (Game + F&B Profit)<h2 style='color:#4F46E5'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             c4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
@@ -493,8 +520,31 @@ with t4:
             f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{gross_fnb_sale:,.0f}</h2></div>", unsafe_allow_html=True)
             f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{gross_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
             
-            # --- THE NEW FEATURE: CUSTOM HARDWARE BREAKDOWN ---
             st.divider()
+            
+            # --- THE NEW FEATURE: WHATSAPP ONE-CLICK REPORT ---
+            st.write("### 📱 One-Click WhatsApp Report")
+            today_date_obj = datetime.now(IST)
+            date_str_wa = f"{get_ordinal(today_date_obj.day)} {today_date_obj.strftime('%B')}"
+            
+            whatsapp_msg = f"""*Today's income -{date_str_wa}*
+
+a. Cash - {total_drawer_cash:,.0f}
+b. UPI -  {total_bank_upi:,.0f}
+c. F&B sale - {gross_fnb_sale:,.0f}
+d. F&B profit- {gross_fnb_profit:,.0f}
+
+*A+B-C+D= Total  - {total_revenue:,.0f}*
+
+Breakup: 
+PS5- {ps_wa:,.0f}
+PC- {pc_wa:,.0f}
+SIM- {sim_wa:,.0f}"""
+
+            st.code(whatsapp_msg, language='markdown')
+            
+            st.divider()
+            
             st.write("### 📅 Custom Hardware Breakdown")
             d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_hw_range")
             if len(d_range_hw) == 2:
@@ -606,6 +656,20 @@ with t5:
                 c5.metric("Last Week", f"₹{lw:,.0f}")
                 
                 st.divider()
+                
+                st.write("### 🎮 Hardware Income Breakdown (Pure Gaming)")
+                hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
+                comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
+                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
+                
+                hw_life = comp_df.groupby('Category')['pure_game'].sum().rename('Lifetime Gross')
+                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['pure_game'].sum().rename('This Month')
+                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['pure_game'].sum().rename('Last Month')
+                
+                hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
+                st.dataframe(hw_summary, hide_index=True, use_container_width=True)
+
+            st.divider()
 
             if not vdf.empty:
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
