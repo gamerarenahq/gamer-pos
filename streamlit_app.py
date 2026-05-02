@@ -43,11 +43,44 @@ except: st.error("Database Connection Error."); st.stop()
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
+# THE FIX: Strict Pricing Logic matching your exact rules
 def get_price(cat, dur, extra=0):
-    if cat == "PS5": return (int(dur) * (150 + (extra * 100))) + ((1 if (dur % 1) != 0 else 0) * (100 + (extra * 100)))
-    elif cat == "PC": return (int(dur) * 100) + ((1 if (dur % 1) != 0 else 0) * 70)
-    elif cat == "Racing Sim": return (int(dur) * 250) + ((1 if (dur % 1) != 0 else 0) * 150)
+    full_hours = int(dur)
+    half_hours = 1 if (dur % 1) != 0 else 0
+    
+    if cat == "PC":
+        return (full_hours * 99) + (half_hours * 70)
+    elif cat == "Racing Sim":
+        return (full_hours * 249) + (half_hours * 150)
+    elif cat == "PS5":
+        # Base PS5 (1 Ctrl) is 149/100. Each extra controller adds 100 to both full and half hours.
+        base_full = 149 + (extra * 100)
+        base_half = 100 + (extra * 100)
+        return (full_hours * base_full) + (half_hours * base_half)
     return 0
+
+# THE FIX: Reverse engineer the controller count based on the exact tier prices
+def get_extra_ctrls(cat, orig_dur, orig_tot):
+    if cat != "PS5": return 0
+    try:
+        full_hours = int(orig_dur)
+        half_hours = 1 if (orig_dur % 1) != 0 else 0
+        
+        # Base cost with 0 extra controllers (meaning 1 player)
+        base_cost = (full_hours * 149) + (half_hours * 100)
+        
+        # The premium paid for extra controllers
+        premium_paid = orig_tot - base_cost
+        
+        # Each extra controller adds 100 per hour AND 100 per half hour.
+        # So a 1.5 hr session with 1 extra ctrl costs an extra 200 (100 for the full hr + 100 for the half hr).
+        cost_per_extra_ctrl = (full_hours * 100) + (half_hours * 100)
+        
+        if cost_per_extra_ctrl == 0: return 0
+        
+        extra = round(premium_paid / cost_per_extra_ctrl)
+        return max(0, int(extra))
+    except: return 0
 
 def get_cash_upi(df, amt_col='total'):
     cash_total = 0.0
@@ -67,7 +100,6 @@ def get_cash_upi(df, amt_col='total'):
             except: pass
     return cash_total, upi_total
 
-# Helper for WhatsApp Date Formatting
 def get_ordinal(n):
     if 11 <= (n % 100) <= 13: return str(n) + 'th'
     return str(n) + ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
@@ -82,14 +114,21 @@ try:
     active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
+    today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
+    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").like("date", f"{today_str_query}%").execute()
+    tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
+    
     if not db_df.empty:
         db_df['total'] = pd.to_numeric(db_df['total'], errors='coerce').fillna(0.0)
         db_df['fnb_total'] = pd.to_numeric(db_df['fnb_total'], errors='coerce').fillna(0.0)
+    if not tab_df.empty:
+        tab_df['total'] = pd.to_numeric(tab_df['total'], errors='coerce').fillna(0.0)
         
 except Exception as e:
     st.error(f"Syncing Database... {e}")
     inv_df = pd.DataFrame(columns=inv_cols)
     db_df = pd.DataFrame(columns=db_cols)
+    tab_df = pd.DataFrame(columns=db_cols)
 
 # --- 4. TABS LAYOUT ---
 t1, t2, t3, t4, t5 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings & Queue", "📊 Daily Snapshot", "🧠 Master Vault"])
@@ -172,14 +211,28 @@ with t1:
                 
                 f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{g_id}")
                 
-                game_bill = float(row.get('total') or 0.0)
+                orig_dur = float(row['duration'])
+                orig_tot = float(row.get('total') or 0.0)
+                sys_cat = SYSTEMS.get(row['system'], 'PC')
+                
+                # Accurately calculate the new dynamic gaming bill based on exact tiers
+                extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
+                dyn_game_bill = float(get_price(sys_cat, f_dur, extra_c))
                 food_bill = float(row.get('fnb_total') or 0.0)
-                calc_total = game_bill + food_bill
                 
-                st.markdown(f"<small style='color:#9CA3AF;'>Gaming: ₹{game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
-                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=10.0, key=f"t1_final_tot_{g_id}_{f_dur}")
+                past_tabs = tab_df[tab_df['customer'] == row['customer']] if not tab_df.empty else pd.DataFrame()
+                past_tab_amt = past_tabs['total'].sum() if not past_tabs.empty else 0.0
+
+                calc_total = dyn_game_bill + food_bill + past_tab_amt
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_pay_{g_id}")
+                if past_tab_amt > 0:
+                    st.markdown(f"<small style='color:#9CA3AF;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></small>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=1.0, key=f"t1_final_tot_{g_id}_{f_dur}")
+                
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment", "Hold on Tab (Switching PC/PS5)"], horizontal=True, key=f"t1_pay_{g_id}")
                 
                 final_method_str = pay
                 if pay == "Split Payment":
@@ -187,17 +240,31 @@ with t1:
                     split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
                     st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
                     final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
+                elif pay == "Hold on Tab (Switching PC/PS5)":
+                    final_method_str = "Master Tab"
                 
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
-                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(final_total)}).eq("id", int(row['id'])).execute()
+                    if final_method_str != "Master Tab" and not past_tabs.empty:
+                        for past_id in past_tabs['id']:
+                            conn.table("sales").update({"method": final_method_str}).eq("id", int(past_id)).execute()
+                    
+                    current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
+                    conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(current_row_final)}).eq("id", int(row['id'])).execute()
                     st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{g_id}")
                 if st.button("➕ Extend Session", key=f"t1_ext_btn_{g_id}"):
                     new_dur = float(row['duration']) + float(ext)
+                    
+                    orig_dur = float(row['duration'])
+                    orig_tot = float(row.get('total') or 0.0)
+                    sys_cat = SYSTEMS.get(row['system'], 'PC')
+                    extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
+                    
                     current_game_bill = float(row.get('total') or 0.0)
-                    new_total = current_game_bill + float(get_price(SYSTEMS[row['system']], ext, 0))
+                    new_total = current_game_bill + float(get_price(sys_cat, ext, extra_c))
+                    
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -488,7 +555,6 @@ with t4:
                 
                 pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
                 
-                # Setup for WhatsApp Today Hardware Breakdown
                 comp['pure_game'] = comp['total'] - comp['fnb_total']
                 hw_map_wa = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"SIM"}
                 comp['Category'] = comp['system'].map(hw_map_wa).fillna(comp['system'])
@@ -527,7 +593,7 @@ with t4:
             today_date_obj = datetime.now(IST)
             date_str_wa = f"{get_ordinal(today_date_obj.day)} {today_date_obj.strftime('%B')}"
             
-            whatsapp_msg = f"""*Today's income -{date_str_wa}*
+            whatsapp_msg = f"""*Today's income - {date_str_wa}*
 
 a. Cash - {total_drawer_cash:,.0f}
 b. UPI -  {total_bank_upi:,.0f}
