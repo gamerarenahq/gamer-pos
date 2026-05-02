@@ -43,16 +43,17 @@ except: st.error("Database Connection Error."); st.stop()
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
+# THE FIX: Rounded numbers for flawless math
 def get_price(cat, dur, extra=0):
     full_hours = int(dur)
     half_hours = 1 if (dur % 1) != 0 else 0
     
     if cat == "PC":
-        return (full_hours * 99) + (half_hours * 70)
+        return (full_hours * 100) + (half_hours * 70)
     elif cat == "Racing Sim":
-        return (full_hours * 249) + (half_hours * 150)
+        return (full_hours * 250) + (half_hours * 150)
     elif cat == "PS5":
-        base_full = 149 + (extra * 100)
+        base_full = 150 + (extra * 100)
         base_half = 100 + (extra * 100)
         return (full_hours * base_full) + (half_hours * base_half)
     return 0
@@ -62,7 +63,7 @@ def get_extra_ctrls(cat, orig_dur, orig_tot):
     try:
         full_hours = int(orig_dur)
         half_hours = 1 if (orig_dur % 1) != 0 else 0
-        base_cost = (full_hours * 149) + (half_hours * 100)
+        base_cost = (full_hours * 150) + (half_hours * 100)
         premium_paid = orig_tot - base_cost
         cost_per_extra_ctrl = (full_hours * 100) + (half_hours * 100)
         if cost_per_extra_ctrl == 0: return 0
@@ -103,7 +104,6 @@ try:
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
     today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
-    # THE FIX: Changed .like() to .gte() to safely handle strict Date/Timestamp columns
     tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).execute()
     tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
     
@@ -576,7 +576,6 @@ with t4:
             
             st.divider()
             
-            # --- THE NEW FEATURE: WHATSAPP ONE-CLICK REPORT ---
             st.write("### 📱 One-Click WhatsApp Report")
             today_date_obj = datetime.now(IST)
             date_str_wa = f"{get_ordinal(today_date_obj.day)} {today_date_obj.strftime('%B')}"
