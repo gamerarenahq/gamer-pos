@@ -43,7 +43,6 @@ except: st.error("Database Connection Error."); st.stop()
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
-# THE FIX: Strict Pricing Logic matching your exact rules
 def get_price(cat, dur, extra=0):
     full_hours = int(dur)
     half_hours = 1 if (dur % 1) != 0 else 0
@@ -53,31 +52,20 @@ def get_price(cat, dur, extra=0):
     elif cat == "Racing Sim":
         return (full_hours * 249) + (half_hours * 150)
     elif cat == "PS5":
-        # Base PS5 (1 Ctrl) is 149/100. Each extra controller adds 100 to both full and half hours.
         base_full = 149 + (extra * 100)
         base_half = 100 + (extra * 100)
         return (full_hours * base_full) + (half_hours * base_half)
     return 0
 
-# THE FIX: Reverse engineer the controller count based on the exact tier prices
 def get_extra_ctrls(cat, orig_dur, orig_tot):
     if cat != "PS5": return 0
     try:
         full_hours = int(orig_dur)
         half_hours = 1 if (orig_dur % 1) != 0 else 0
-        
-        # Base cost with 0 extra controllers (meaning 1 player)
         base_cost = (full_hours * 149) + (half_hours * 100)
-        
-        # The premium paid for extra controllers
         premium_paid = orig_tot - base_cost
-        
-        # Each extra controller adds 100 per hour AND 100 per half hour.
-        # So a 1.5 hr session with 1 extra ctrl costs an extra 200 (100 for the full hr + 100 for the half hr).
         cost_per_extra_ctrl = (full_hours * 100) + (half_hours * 100)
-        
         if cost_per_extra_ctrl == 0: return 0
-        
         extra = round(premium_paid / cost_per_extra_ctrl)
         return max(0, int(extra))
     except: return 0
@@ -115,7 +103,8 @@ try:
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
     today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
-    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").like("date", f"{today_str_query}%").execute()
+    # THE FIX: Changed .like() to .gte() to safely handle strict Date/Timestamp columns
+    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).execute()
     tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
     
     if not db_df.empty:
@@ -215,7 +204,6 @@ with t1:
                 orig_tot = float(row.get('total') or 0.0)
                 sys_cat = SYSTEMS.get(row['system'], 'PC')
                 
-                # Accurately calculate the new dynamic gaming bill based on exact tiers
                 extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
                 dyn_game_bill = float(get_price(sys_cat, f_dur, extra_c))
                 food_bill = float(row.get('fnb_total') or 0.0)
