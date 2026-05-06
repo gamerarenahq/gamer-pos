@@ -43,7 +43,6 @@ except: st.error("Database Connection Error."); st.stop()
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
 
-# THE FIX: Rounded numbers for flawless math
 def get_price(cat, dur, extra=0):
     full_hours = int(dur)
     half_hours = 1 if (dur % 1) != 0 else 0
@@ -503,11 +502,11 @@ with t3:
                         st.warning("Booking Cancelled!"); st.rerun()
 
 # ==========================================
-# TAB 4: SNAPSHOT & REPORTS
+# TAB 4: SNAPSHOT & REPORTS (STAFF VIEW)
 # ==========================================
 with t4:
-    st.subheader("📊 Today's Summary & Exports")
-    if st.text_input("Manager Passcode", type="password", key="t4_pwd") == "Shreenad@0511":
+    st.subheader("📊 Daily Floor Snapshot")
+    if st.text_input("Staff Passcode", type="password", key="t4_pwd") == "Shreenad@0511":
         try:
             raw = conn.table("sales").select("*").execute()
             df = pd.DataFrame(raw.data)
@@ -518,63 +517,116 @@ with t4:
                 cafe_df = pd.DataFrame(cafe_raw.data)
                 if not cafe_df.empty:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
-                    cafe_df['profit'] = pd.to_numeric(cafe_df['profit'], errors='coerce').fillna(0.0)
-                    
-                    gross_fnb_sale = cafe_df['total_revenue'].sum()
-                    gross_fnb_profit = cafe_df['profit'].sum()
-                    
                     direct_fnb_df = cafe_df[cafe_df['method'] != 'Tab']
                     direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
                 else:
-                    gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+                    direct_fnb_cash = direct_fnb_upi = 0.0
             except:
-                gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+                direct_fnb_cash = direct_fnb_upi = 0.0
 
             if not df.empty:
                 df['date_str'] = df['date'].str[:10] 
                 t_df = df[df['date_str'] == today_str]
                 comp = t_df[t_df['status'] == 'Completed'].copy()
-                
                 comp['total'] = pd.to_numeric(comp['total'], errors='coerce').fillna(0.0)
-                comp['fnb_total'] = pd.to_numeric(comp['fnb_total'], errors='coerce').fillna(0.0)
-                
                 checkout_cash, checkout_upi = get_cash_upi(comp, 'total')
-                pure_game_rev = (comp['total'] - comp['fnb_total']).sum()
-                
                 pending_floor = pd.to_numeric(t_df[t_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
+            else:
+                checkout_cash = checkout_upi = pending_floor = 0.0
+
+            total_drawer_cash = checkout_cash + direct_fnb_cash
+            total_bank_upi = checkout_upi + direct_fnb_upi
+
+            st.write("### 💰 Today's Collections")
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
+            
+        except Exception as e: st.error(f"Error loading summary. {e}")
+
+# ==========================================
+# TAB 5: MASTER VAULT (OWNER VIEW)
+# ==========================================
+with t5:
+    st.subheader("🔐 Master Intelligence Vault")
+    if st.text_input("Master Key", type="password", key="t5_pwd") == "Su22101992@":
+        try:
+            with st.expander("💸 Record Cafe Expenses", expanded=False):
+                with st.form("expense_form"):
+                    e_desc, e_amt, e_meth = st.columns(3)
+                    desc = e_desc.text_input("Expense Details", key="t5_e_desc")
+                    amt = e_amt.number_input("Amount (₹)", 0, key="t5_e_amt")
+                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
+                    if st.form_submit_button("Log Expense", use_container_width=True):
+                        conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
+                        st.success("Logged!"); st.rerun()
+
+            st.divider()
+            
+            today_str = datetime.now(IST).strftime('%Y-%m-%d')
+            
+            raw_v = conn.table("sales").select("*").execute()
+            vdf = pd.DataFrame(raw_v.data)
+            
+            cafe_res = conn.table("cafe_orders").select("*").execute()
+            cafe_all_df = pd.DataFrame(cafe_res.data)
+            
+            # --- 1. Compute Today's Critical Data for the Vault ---
+            if not cafe_all_df.empty:
+                cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
+                if not cafe_today.empty:
+                    cafe_today['total_revenue'] = pd.to_numeric(cafe_today['total_revenue'], errors='coerce').fillna(0.0)
+                    cafe_today['profit'] = pd.to_numeric(cafe_today['profit'], errors='coerce').fillna(0.0)
+                    gross_fnb_sale = cafe_today['total_revenue'].sum()
+                    gross_fnb_profit = cafe_today['profit'].sum()
+                    direct_fnb_df = cafe_today[cafe_today['method'] != 'Tab']
+                    direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
+                else:
+                    gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+            else:
+                gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+
+            if not vdf.empty:
+                vdf['date_str'] = vdf['date'].str[:10]
+                comp_df = vdf[vdf['status'] == 'Completed'].copy()
+                comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
+                comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
+                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
                 
-                comp['pure_game'] = comp['total'] - comp['fnb_total']
+                today_comp = comp_df[comp_df['date_str'] == today_str].copy()
+                checkout_cash, checkout_upi = get_cash_upi(today_comp, 'total')
+                pure_game_rev = today_comp['pure_game'].sum()
+                
                 hw_map_wa = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"SIM"}
-                comp['Category'] = comp['system'].map(hw_map_wa).fillna(comp['system'])
-                today_hw_group = comp.groupby('Category')['pure_game'].sum()
+                today_comp['Category'] = today_comp['system'].map(hw_map_wa).fillna(today_comp['system'])
+                today_hw_group = today_comp.groupby('Category')['pure_game'].sum()
                 ps_wa = today_hw_group.get('PS5', 0.0)
                 pc_wa = today_hw_group.get('PC', 0.0)
                 sim_wa = today_hw_group.get('SIM', 0.0)
-                
             else:
-                checkout_cash = checkout_upi = pure_game_rev = pending_floor = 0.0
+                comp_df = pd.DataFrame()
+                checkout_cash = checkout_upi = pure_game_rev = 0.0
                 ps_wa = pc_wa = sim_wa = 0.0
 
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
             total_revenue = pure_game_rev + gross_fnb_profit
-
-            st.write("### 💰 Master Revenue")
-            c1, c2, c3, c4 = st.columns(4)
+            
+            # --- Render Today's Master Summary ---
+            st.write("### 📅 Today's Master Summary")
+            c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Net Revenue (Game + F&B Profit)<h2 style='color:#4F46E5'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
-            c4.markdown(f"<div class='metric-box' style='border-color:#FF754C'>Pending on Floor<h2 style='color:#FF754C'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
             
-            st.write("### 🎮 Gaming Breakdown")
+            st.write("### 🎮 Today's Gaming Breakdown")
             st.markdown(f"<div class='metric-box' style='border-color:#98DED9'>Pure Gaming Sale (Hardware Time Only)<h2 style='color:#98DED9'>₹{pure_game_rev:,.0f}</h2></div>", unsafe_allow_html=True)
             
-            st.write("### 🍔 F&B Breakdown")
+            st.write("### 🍔 Today's F&B Breakdown")
             f1, f2 = st.columns(2)
             f1.markdown(f"<div class='metric-box' style='border-color:#34D399'>Total F&B Sale<h2 style='color:#34D399'>₹{gross_fnb_sale:,.0f}</h2></div>", unsafe_allow_html=True)
             f2.markdown(f"<div class='metric-box' style='border-color:#10B981'>F&B Profit (Yours)<h2 style='color:#10B981'>₹{gross_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
-            
-            st.divider()
             
             st.write("### 📱 One-Click WhatsApp Report")
             today_date_obj = datetime.now(IST)
@@ -599,11 +651,11 @@ SIM- {sim_wa:,.0f}"""
             st.divider()
             
             st.write("### 📅 Custom Hardware Breakdown")
-            d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_hw_range")
+            d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_hw_range")
             if len(d_range_hw) == 2:
                 s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range_hw]
-                if not df.empty:
-                    hw_filter = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt) & (df['status'] == 'Completed')].copy()
+                if not vdf.empty:
+                    hw_filter = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt) & (vdf['status'] == 'Completed')].copy()
                     
                     if not hw_filter.empty:
                         hw_filter['total'] = pd.to_numeric(hw_filter['total'], errors='coerce').fillna(0.0)
@@ -631,46 +683,18 @@ SIM- {sim_wa:,.0f}"""
 
             st.divider()
             st.write("### Export Data")
-            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t4_drange")
+            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_drange")
             if len(d_range) == 2:
                 s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
-                f_edf = df[(df['date_str'] >= s_dt) & (df['date_str'] <= e_dt)]
-                st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t4_export_btn")
-        except Exception as e: st.error(f"Error loading summary. {e}")
-
-# ==========================================
-# TAB 5: MASTER VAULT
-# ==========================================
-with t5:
-    st.subheader("🔐 Master Intelligence Vault")
-    if st.text_input("Master Key", type="password", key="t5_pwd") == "Shreenad@0511":
-        try:
-            raw_v = conn.table("sales").select("*").execute()
-            vdf = pd.DataFrame(raw_v.data)
+                f_edf = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt)] if not vdf.empty else pd.DataFrame()
+                if not f_edf.empty:
+                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t5_export_btn")
             
-            with st.expander("💸 Record Cafe Expenses", expanded=False):
-                with st.form("expense_form"):
-                    e_desc, e_amt, e_meth = st.columns(3)
-                    desc = e_desc.text_input("Expense Details", key="t5_e_desc")
-                    amt = e_amt.number_input("Amount (₹)", 0, key="t5_e_amt")
-                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
-                    if st.form_submit_button("Log Expense", use_container_width=True):
-                        conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
-                        st.success("Logged!"); st.rerun()
-
             st.divider()
-            
-            if not vdf.empty:
-                vdf['date_str'] = vdf['date'].str[:10]
-                comp_df = vdf[vdf['status'] == 'Completed'].copy()
-                comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
-                comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
-                
-                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
+
+            # --- Executive Revenue Dashboard ---
+            if not comp_df.empty:
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
-                
-                cafe_res = conn.table("cafe_orders").select("*").execute()
-                cafe_all_df = pd.DataFrame(cafe_res.data)
                 
                 if not cafe_all_df.empty:
                     cafe_all_df['date_str'] = cafe_all_df['date'].str[:10]
@@ -710,7 +734,7 @@ with t5:
                 
                 st.divider()
                 
-                st.write("### 🎮 Hardware Income Breakdown (Pure Gaming)")
+                st.write("### 🎮 Lifetime Hardware Breakdown (Pure Gaming)")
                 hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
                 comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
                 comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
