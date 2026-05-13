@@ -48,7 +48,6 @@ with st.sidebar:
 
 # --- 3. DATABASE SETUP & HELPER FUNCS ---
 try: 
-    # Force ttl=0 to prevent Streamlit from caching stale database responses
     conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
 except Exception as e: 
     st.error(f"Database Connection Error. {e}"); st.stop()
@@ -108,15 +107,16 @@ def get_ordinal(n):
 inv_cols = ["id", "item_name", "category", "cost_price", "selling_price", "stock_level"]
 db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "entry_time", "status", "scheduled_date", "fnb_total", "fnb_items", "date"]
 
+# THE FIX: Explicitly forcing ttl=0 on every single database read operation
 try:
-    inv_res = conn.table("inventory").select("*").order('item_name').execute()
+    inv_res = conn.table("inventory").select("*").order('item_name').execute(ttl=0)
     inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
     
-    active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute()
+    active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).execute(ttl=0)
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
     today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
-    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).execute()
+    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).execute(ttl=0)
     tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
     
     if not db_df.empty:
@@ -199,7 +199,6 @@ with t1:
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             g_id = str(row['id'])
             
-            # THE FIX: Tie the Streamlit keys to the raw database values to prevent "stuck" widgets
             raw_t = float(row.get('total') or 0.0)
             raw_f = float(row.get('fnb_total') or 0.0)
             db_state_key = f"{g_id}_{raw_t}_{raw_f}"
@@ -221,8 +220,6 @@ with t1:
                 orig_tot = raw_t
                 sys_cat = SYSTEMS.get(row['system'], 'PC')
                 
-                # THE FIX: If you manually changed the price in Supabase, the system respects it! 
-                # It only recalculates if you actively alter the hours on the screen.
                 if f_dur == orig_dur:
                     dyn_game_bill = orig_tot
                 else:
@@ -272,7 +269,6 @@ with t1:
                     sys_cat = SYSTEMS.get(row['system'], 'PC')
                     extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
                     
-                    # THE FIX: Calculates the correct standard price for the entire NEW continuous duration
                     new_total = float(get_price(sys_cat, new_dur, extra_c))
                     
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
@@ -363,7 +359,8 @@ with t2:
                     }).execute()
                     
                     if assign == "Add to Active Gamer" and gamer_id:
-                        cur_tab = conn.table("sales").select("fnb_items, fnb_total").eq("id", gamer_id).execute().data[0]
+                        # THE FIX: Apply ttl=0 to read queries inside conditional blocks
+                        cur_tab = conn.table("sales").select("fnb_items, fnb_total").eq("id", gamer_id).execute(ttl=0).data[0]
                         old_i = cur_tab.get('fnb_items') or ""
                         old_t = float(cur_tab.get('fnb_total') or 0.0)
                         conn.table("sales").update({"fnb_items": f"{old_i} | {items_str}" if old_i else items_str, "fnb_total": float(old_t + tot_sell)}).eq("id", gamer_id).execute()
@@ -531,12 +528,13 @@ with t4:
     st.subheader("📊 Daily Floor Snapshot")
     if st.text_input("Staff Passcode", type="password", key="t4_pwd") == "Shreenad@0511":
         try:
-            raw = conn.table("sales").select("*").execute()
+            # THE FIX: Enforce live fetch for critical daily snapshot queries
+            raw = conn.table("sales").select("*").execute(ttl=0)
             df = pd.DataFrame(raw.data)
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
             try:
-                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute()
+                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).execute(ttl=0)
                 cafe_df = pd.DataFrame(cafe_raw.data)
                 if not cafe_df.empty:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
@@ -589,10 +587,11 @@ with t5:
             
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
-            raw_v = conn.table("sales").select("*").execute()
+            # THE FIX: Enforce live fetch for the Master Vault
+            raw_v = conn.table("sales").select("*").execute(ttl=0)
             vdf = pd.DataFrame(raw_v.data)
             
-            cafe_res = conn.table("cafe_orders").select("*").execute()
+            cafe_res = conn.table("cafe_orders").select("*").execute(ttl=0)
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
             # --- 1. Compute Today's Critical Data for the Vault ---
@@ -775,7 +774,8 @@ SIM- {sim_wa:,.0f}"""
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
                 tot_inc = revenue_df[['date_str', 'total']].rename(columns={'total': 'Gross Income'})
                 
-                exp_raw = conn.table("expenses").select("*").execute()
+                # THE FIX: Enforce live fetch for Expenses ledger
+                exp_raw = conn.table("expenses").select("*").execute(ttl=0)
                 exp_df = pd.DataFrame(exp_raw.data)
                 if not exp_df.empty:
                     exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
