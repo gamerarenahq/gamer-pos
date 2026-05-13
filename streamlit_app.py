@@ -47,8 +47,11 @@ with st.sidebar:
         st.rerun()
 
 # --- 3. DATABASE SETUP & HELPER FUNCS ---
-try: conn = st.connection("supabase", type=SupabaseConnection)
-except: st.error("Database Connection Error."); st.stop()
+try: 
+    # Force ttl=0 to prevent Streamlit from caching stale database responses
+    conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
+except Exception as e: 
+    st.error(f"Database Connection Error. {e}"); st.stop()
 
 SYSTEMS = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"Racing Sim"}
 VENDOR_CATS = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages"]
@@ -196,7 +199,12 @@ with t1:
             row = active_gamers[active_gamers['lbl'] == sel].iloc[0]
             g_id = str(row['id'])
             
-            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key=f"t1_op_mode_{g_id}")
+            # THE FIX: Tie the Streamlit keys to the raw database values to prevent "stuck" widgets
+            raw_t = float(row.get('total') or 0.0)
+            raw_f = float(row.get('fnb_total') or 0.0)
+            db_state_key = f"{g_id}_{raw_t}_{raw_f}"
+            
+            op_mode = st.radio("Action", ["Smart Checkout", "Add Time"], horizontal=True, key=f"t1_op_mode_{db_state_key}")
             
             if op_mode == "Smart Checkout":
                 try: played_mins = int((datetime.now(IST) - pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)).total_seconds() / 60.0)
@@ -207,16 +215,21 @@ with t1:
                 if played_mins <= 40 and row['duration'] >= 1.0: rec_dur = 0.5
                 elif played_mins > 40 and played_mins <= 60 and row['duration'] > 1.0: rec_dur = 1.0
                 
-                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{g_id}")
+                f_dur = st.number_input("Billed Hrs", 0.5, 12.0, float(rec_dur), 0.5, key=f"t1_bhrs_{db_state_key}")
                 
                 orig_dur = float(row['duration'])
-                orig_tot = float(row.get('total') or 0.0)
+                orig_tot = raw_t
                 sys_cat = SYSTEMS.get(row['system'], 'PC')
                 
-                extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
-                dyn_game_bill = float(get_price(sys_cat, f_dur, extra_c))
-                food_bill = float(row.get('fnb_total') or 0.0)
+                # THE FIX: If you manually changed the price in Supabase, the system respects it! 
+                # It only recalculates if you actively alter the hours on the screen.
+                if f_dur == orig_dur:
+                    dyn_game_bill = orig_tot
+                else:
+                    extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
+                    dyn_game_bill = float(get_price(sys_cat, f_dur, extra_c))
                 
+                food_bill = raw_f
                 past_tabs = tab_df[tab_df['customer'] == row['customer']] if not tab_df.empty else pd.DataFrame()
                 past_tab_amt = past_tabs['total'].sum() if not past_tabs.empty else 0.0
 
@@ -227,20 +240,20 @@ with t1:
                 else:
                     st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
 
-                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=1.0, key=f"t1_final_tot_{g_id}_{f_dur}")
+                final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=1.0, key=f"t1_final_tot_{db_state_key}_{f_dur}_{calc_total}")
                 
-                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment", "Hold on Tab (Switching PC/PS5)"], horizontal=True, key=f"t1_pay_{g_id}")
+                pay = st.radio("Pay Method", ["Cash", "UPI", "Split Payment", "Hold on Tab (Switching PC/PS5)"], horizontal=True, key=f"t1_pay_{db_state_key}")
                 
                 final_method_str = pay
                 if pay == "Split Payment":
                     st.caption("How much was paid in Cash?")
-                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{g_id}_{final_total}")
+                    split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(final_total), value=float(final_total)/2, step=10.0, key=f"t1_split_{db_state_key}_{final_total}")
                     st.info(f"💳 Remaining UPI Portion: **₹{final_total - split_cash:.0f}**")
                     final_method_str = f"Split|{split_cash}|{final_total - split_cash}"
                 elif pay == "Hold on Tab (Switching PC/PS5)":
                     final_method_str = "Master Tab"
                 
-                if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{g_id}"):
+                if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{db_state_key}"):
                     if final_method_str != "Master Tab" and not past_tabs.empty:
                         for past_id in past_tabs['id']:
                             conn.table("sales").update({"method": final_method_str}).eq("id", int(past_id)).execute()
@@ -250,17 +263,17 @@ with t1:
                     st.cache_data.clear(); st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
-                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{g_id}")
-                if st.button("➕ Extend Session", key=f"t1_ext_btn_{g_id}"):
+                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{db_state_key}")
+                if st.button("➕ Extend Session", key=f"t1_ext_btn_{db_state_key}"):
                     new_dur = float(row['duration']) + float(ext)
                     
                     orig_dur = float(row['duration'])
-                    orig_tot = float(row.get('total') or 0.0)
+                    orig_tot = raw_t
                     sys_cat = SYSTEMS.get(row['system'], 'PC')
                     extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
                     
-                    current_game_bill = float(row.get('total') or 0.0)
-                    new_total = current_game_bill + float(get_price(sys_cat, ext, extra_c))
+                    # THE FIX: Calculates the correct standard price for the entire NEW continuous duration
+                    new_total = float(get_price(sys_cat, new_dur, extra_c))
                     
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.cache_data.clear(); st.rerun()
