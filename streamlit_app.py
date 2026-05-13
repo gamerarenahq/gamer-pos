@@ -36,6 +36,16 @@ if not st.session_state.auth:
         st.session_state.auth = True; st.rerun()
     st.stop()
 
+# --- NEW: SYSTEM SIDEBAR ---
+with st.sidebar:
+    st.write("### ⚙️ System Controls")
+    if st.button("🔄 Force Sync Data", use_container_width=True, type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+    if st.button("🔒 Lock Screen", use_container_width=True):
+        st.session_state.auth = False
+        st.rerun()
+
 # --- 3. DATABASE SETUP & HELPER FUNCS ---
 try: conn = st.connection("supabase", type=SupabaseConnection)
 except: st.error("Database Connection Error."); st.stop()
@@ -237,7 +247,7 @@ with t1:
                     
                     current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
                     conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(current_row_final)}).eq("id", int(row['id'])).execute()
-                    st.balloons(); st.rerun()
+                    st.cache_data.clear(); st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{g_id}")
@@ -253,7 +263,7 @@ with t1:
                     new_total = current_game_bill + float(get_price(sys_cat, ext, extra_c))
                     
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
-                    st.rerun()
+                    st.cache_data.clear(); st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -345,7 +355,7 @@ with t2:
                         old_t = float(cur_tab.get('fnb_total') or 0.0)
                         conn.table("sales").update({"fnb_items": f"{old_i} | {items_str}" if old_i else items_str, "fnb_total": float(old_t + tot_sell)}).eq("id", gamer_id).execute()
                     
-                    st.session_state.fnb_cart = []; st.success("Order Processed!"); st.rerun()
+                    st.session_state.fnb_cart = []; st.cache_data.clear(); st.success("Order Processed!"); st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
     with inv_tab:
@@ -362,7 +372,7 @@ with t2:
                     if st.button("Update Stock Levels", use_container_width=True, key="t2_refill_btn"):
                         c_qty = inv_df[inv_df['item_name'] == refill_item].iloc[0]['stock_level']
                         conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
-                        st.success(f"Added stock to {refill_item}!"); st.rerun()
+                        st.cache_data.clear(); st.success(f"Added stock to {refill_item}!"); st.rerun()
                 else: st.info("No trackable items in inventory.")
             
             st.write("---")
@@ -371,7 +381,7 @@ with t2:
                 del_item = st.selectbox("Select Item to Delete", inv_df['item_name'].tolist(), key="t2_del_item")
                 if st.button("Delete from Database", type="primary", use_container_width=True, key="t2_del_btn"):
                     conn.table("inventory").delete().eq("item_name", del_item).execute()
-                    st.warning(f"Deleted {del_item} permanently!"); st.rerun()
+                    st.cache_data.clear(); st.warning(f"Deleted {del_item} permanently!"); st.rerun()
 
         with c2:
             st.write("### ➕ Add New Item")
@@ -397,7 +407,7 @@ with t2:
                     else:
                         try:
                             conn.table("inventory").insert({"item_name": n_name.strip(), "category": final_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
-                            st.success(f"Successfully added {n_name}!")
+                            st.cache_data.clear(); st.success(f"Successfully added {n_name}!")
                             st.rerun()
                         except Exception as e: st.error(f"Failed to add to database. Error: {e}")
 
@@ -471,7 +481,7 @@ with t3:
                     if not conflict:
                         for item in st.session_state.cart:
                             conn.table("sales").insert({"customer": name, "phone": phone, "system": item['system'], "duration": float(item['duration']), "total": float(item['price']), "method": "Pending", "entry_time": time_str, "status": final_status, "scheduled_date": sch_date}).execute()
-                        st.session_state.cart = []; st.session_state.form_reset += 1; st.success("Success!"); st.rerun()
+                        st.session_state.cart = []; st.session_state.form_reset += 1; st.cache_data.clear(); st.success("Success!"); st.rerun()
         else: st.info("Cart is empty.")
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -491,7 +501,7 @@ with t3:
                         t_id = up_df[up_df['lbl'] == sel_chk].iloc[0]['id']
                         now_time = datetime.now(IST).strftime("%I:%M %p")
                         conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", int(t_id)).execute()
-                        st.success("Checked in successfully!"); st.rerun()
+                        st.cache_data.clear(); st.success("Checked in successfully!"); st.rerun()
                 
                 with c_can:
                     st.write("🚫 **Cancel Booking**")
@@ -499,7 +509,7 @@ with t3:
                     if st.button("Cancel Booking", type="primary", use_container_width=True, key="t3_can_btn"):
                         t_id = up_df[up_df['lbl'] == sel_can].iloc[0]['id']
                         conn.table("sales").update({"status": "Cancelled"}).eq("id", int(t_id)).execute()
-                        st.warning("Booking Cancelled!"); st.rerun()
+                        st.cache_data.clear(); st.warning("Booking Cancelled!"); st.rerun()
 
 # ==========================================
 # TAB 4: SNAPSHOT & REPORTS (STAFF VIEW)
@@ -560,7 +570,7 @@ with t5:
                     meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
                     if st.form_submit_button("Log Expense", use_container_width=True):
                         conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
-                        st.success("Logged!"); st.rerun()
+                        st.cache_data.clear(); st.success("Logged!"); st.rerun()
 
             st.divider()
             
