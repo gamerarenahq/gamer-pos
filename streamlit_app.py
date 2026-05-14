@@ -59,10 +59,8 @@ def get_price(cat, dur, extra=0):
     full_hours = int(dur)
     half_hours = 1 if (dur % 1) != 0 else 0
     
-    if cat == "PC":
-        return (full_hours * 100) + (half_hours * 70)
-    elif cat == "Racing Sim":
-        return (full_hours * 250) + (half_hours * 150)
+    if cat == "PC": return (full_hours * 100) + (half_hours * 70)
+    elif cat == "Racing Sim": return (full_hours * 250) + (half_hours * 150)
     elif cat == "PS5":
         base_full = 150 + (extra * 100)
         base_half = 100 + (extra * 100)
@@ -107,16 +105,16 @@ def get_ordinal(n):
 inv_cols = ["id", "item_name", "category", "cost_price", "selling_price", "stock_level"]
 db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "entry_time", "status", "scheduled_date", "fnb_total", "fnb_items", "date"]
 
-# THE FIX: Added .limit(50000) to bypass the Supabase 1,000 row cap!
+# THE FIX: Added .order('id', desc=True) to ALWAYS pull the absolute newest data first!
 try:
-    inv_res = conn.table("inventory").select("*").order('item_name').limit(10000).execute()
+    inv_res = conn.table("inventory").select("*").order('item_name').execute()
     inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
     
-    active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).limit(10000).execute()
+    active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).order('id', desc=True).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
     today_str_query = datetime.now(IST).strftime('%Y-%m-%d')
-    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).limit(10000).execute()
+    tab_res = conn.table("sales").select("*").eq("status", "Completed").eq("method", "Master Tab").gte("date", today_str_query).order('id', desc=True).execute()
     tab_df = pd.DataFrame(tab_res.data) if tab_res.data else pd.DataFrame(columns=db_cols)
     
     if not db_df.empty:
@@ -263,14 +261,11 @@ with t1:
                 ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{db_state_key}")
                 if st.button("➕ Extend Session", key=f"t1_ext_btn_{db_state_key}"):
                     new_dur = float(row['duration']) + float(ext)
-                    
                     orig_dur = float(row['duration'])
                     orig_tot = raw_t
                     sys_cat = SYSTEMS.get(row['system'], 'PC')
                     extra_c = get_extra_ctrls(sys_cat, orig_dur, orig_tot)
-                    
                     new_total = float(get_price(sys_cat, new_dur, extra_c))
-                    
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.cache_data.clear(); st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -297,7 +292,6 @@ with t2:
                             is_disabled = track_stock and r['stock_level'] <= 0
                             stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
                             label = f"{r['item_name']}\n₹{r['selling_price']:.0f}{stock_label}"
-                            
                             if grid[i % 4].button(label, key=f"fnb_{r['id']}", disabled=is_disabled, use_container_width=True):
                                 st.session_state.fnb_cart.append({"id": r['id'], "name": r['item_name'], "price": r['selling_price'], "cost": r['cost_price'], "track_stock": track_stock})
                                 st.rerun()
@@ -321,12 +315,10 @@ with t2:
                 tot_sell = sum([x['price'] for x in st.session_state.fnb_cart])
                 tot_cost = sum([x['cost'] for x in st.session_state.fnb_cart])
                 items_str = " | ".join([x['name'] for x in st.session_state.fnb_cart])
-                
                 for i, item in enumerate(st.session_state.fnb_cart):
                     c_n, c_d = st.columns([4, 1])
                     c_n.write(f"• {item['name']} (₹{item['price']:.0f})")
                     if c_d.button("X", key=f"delf_{i}"): st.session_state.fnb_cart.pop(i); st.rerun()
-                
                 st.markdown(f"### Total: ₹{tot_sell:.0f}")
                 
                 assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"], key="t2_assign")
@@ -351,7 +343,6 @@ with t2:
                         if item.get('track_stock', False) and item['id'] != 'byob':
                             cur_stock = inv_df[inv_df['id'] == item['id']].iloc[0]['stock_level']
                             conn.table("inventory").update({"stock_level": int(cur_stock - 1)}).eq("id", item['id']).execute()
-                            
                     conn.table("cafe_orders").insert({
                         "date": datetime.now(IST).strftime('%Y-%m-%d'), "items": items_str, 
                         "total_revenue": float(tot_sell), "total_cost": float(tot_cost), "profit": float(tot_sell - tot_cost),
@@ -363,14 +354,12 @@ with t2:
                         old_i = cur_tab.get('fnb_items') or ""
                         old_t = float(cur_tab.get('fnb_total') or 0.0)
                         conn.table("sales").update({"fnb_items": f"{old_i} | {items_str}" if old_i else items_str, "fnb_total": float(old_t + tot_sell)}).eq("id", gamer_id).execute()
-                    
                     st.session_state.fnb_cart = []; st.cache_data.clear(); st.success("Order Processed!"); st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
     with inv_tab:
         st.subheader("Manage Catalog & Stock")
         c1, c2 = st.columns(2, gap="large")
-        
         with c1:
             st.write("### 📥 Refill Existing Stock")
             if not inv_df.empty:
@@ -383,7 +372,6 @@ with t2:
                         conn.table("inventory").update({"stock_level": int(c_qty + refill_qty)}).eq("item_name", refill_item).execute()
                         st.cache_data.clear(); st.success(f"Added stock to {refill_item}!"); st.rerun()
                 else: st.info("No trackable items in inventory.")
-            
             st.write("---")
             st.write("### 🗑️ Delete Item")
             if not inv_df.empty:
@@ -391,23 +379,18 @@ with t2:
                 if st.button("Delete from Database", type="primary", use_container_width=True, key="t2_del_btn"):
                     conn.table("inventory").delete().eq("item_name", del_item).execute()
                     st.cache_data.clear(); st.warning(f"Deleted {del_item} permanently!"); st.rerun()
-
         with c2:
             st.write("### ➕ Add New Item")
             with st.form("new_inv"):
                 n_name = st.text_input("Name (e.g., Red Bull, Snickers)", key="t2_n_name")
-                
                 existing_cats = inv_df['category'].dropna().unique().tolist() if not inv_df.empty else []
                 base_cats = ["Burgers & Meals", "Fries & Snacks", "Mocktails", "Beverages", "Chips", "Cold Drinks", "Chocolates"]
                 all_cats = sorted(list(set(base_cats + existing_cats))) + ["➕ Create New Category"]
-                
                 n_cat_sel = st.selectbox("Category", all_cats, key="t2_n_cat_sel")
                 n_cat_new = st.text_input("If 'Create New Category', type name here:", key="t2_n_cat_new")
-                
                 n_cost = st.number_input("Cost to you (₹)", 0.0, key="t2_n_cost")
                 n_sell = st.number_input("Selling Price (₹)", 0.0, key="t2_n_sell")
                 n_qty = st.number_input("Starting Stock (Leave 0 for outside vendor items)", 0, key="t2_n_qty")
-                
                 if st.form_submit_button("Add to Database", use_container_width=True):
                     final_cat = n_cat_new.strip() if n_cat_sel == "➕ Create New Category" else n_cat_sel
                     if not n_name.strip(): st.error("⚠️ Please enter a name for the item.")
@@ -527,14 +510,13 @@ with t4:
     st.subheader("📊 Daily Floor Snapshot")
     if st.text_input("Staff Passcode", type="password", key="t4_pwd") == "Shreenad@0511":
         try:
-            # THE FIX: Added .limit(50000)
-            raw = conn.table("sales").select("*").limit(50000).execute()
+            # THE FIX: Added .order('id', desc=True) to grab newest snapshot data
+            raw = conn.table("sales").select("*").order('id', desc=True).execute()
             df = pd.DataFrame(raw.data)
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
             try:
-                # THE FIX: Added .limit(50000)
-                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).limit(50000).execute()
+                cafe_raw = conn.table("cafe_orders").select("*").eq("date", today_str).order('id', desc=True).execute()
                 cafe_df = pd.DataFrame(cafe_raw.data)
                 if not cafe_df.empty:
                     cafe_df['total_revenue'] = pd.to_numeric(cafe_df['total_revenue'], errors='coerce').fillna(0.0)
@@ -587,14 +569,13 @@ with t5:
             
             today_str = datetime.now(IST).strftime('%Y-%m-%d')
             
-            # THE FIX: Added .limit(50000) to fetch the entire history for accurate lifetime math
-            raw_v = conn.table("sales").select("*").limit(50000).execute()
+            # THE FIX: Added .order('id', desc=True) to Vault fetches
+            raw_v = conn.table("sales").select("*").order('id', desc=True).execute()
             vdf = pd.DataFrame(raw_v.data)
             
-            cafe_res = conn.table("cafe_orders").select("*").limit(50000).execute()
+            cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
-            # --- 1. Compute Today's Critical Data for the Vault ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
                 if not cafe_today.empty:
@@ -635,7 +616,6 @@ with t5:
             total_bank_upi = checkout_upi + direct_fnb_upi
             total_revenue = pure_game_rev + gross_fnb_profit
             
-            # --- Render Today's Master Summary ---
             st.write("### 📅 Today's Master Summary")
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='metric-box' style='border-color:#4F46E5'>Net Revenue (Game + F&B Profit)<h2 style='color:#4F46E5'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
@@ -714,7 +694,6 @@ SIM- {sim_wa:,.0f}"""
             
             st.divider()
 
-            # --- Executive Revenue Dashboard ---
             if not comp_df.empty:
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 
@@ -774,8 +753,7 @@ SIM- {sim_wa:,.0f}"""
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
                 tot_inc = revenue_df[['date_str', 'total']].rename(columns={'total': 'Gross Income'})
                 
-                # THE FIX: Added .limit(50000) for expenses to get accurate math
-                exp_raw = conn.table("expenses").select("*").limit(50000).execute()
+                exp_raw = conn.table("expenses").select("*").order('id', desc=True).execute()
                 exp_df = pd.DataFrame(exp_raw.data)
                 if not exp_df.empty:
                     exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
