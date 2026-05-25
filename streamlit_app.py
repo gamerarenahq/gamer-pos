@@ -25,6 +25,7 @@ st.markdown("""
     .panel-box { background: #121824; padding: 20px; border-radius: 16px; border: 1px solid #1E293B; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     .menu-btn>button { background: #1A2235; border: 1px solid #2D3748; height: 70px; border-radius: 10px; color: #E2E8F0 !important; transition: 0.2s; }
     .menu-btn>button:hover { border-color: #00D0FF; color: #00D0FF !important; box-shadow: 0 0 12px rgba(0, 208, 255, 0.2); }
+    input, select, .stSelectbox > div > div { background-color: #1A2235 !important; color: white !important; border: 1px solid #2D3748 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -36,11 +37,22 @@ if not st.session_state.auth:
         st.session_state.auth = True; st.rerun()
     st.stop()
 
+# --- SYSTEM SIDEBAR ---
+with st.sidebar:
+    st.write("### ⚙️ System Controls")
+    if st.button("🔄 Force Sync Data", use_container_width=True, type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+    if st.button("🔒 Lock Screen", use_container_width=True):
+        st.session_state.auth = False
+        st.rerun()
+
 # --- 3. DATABASE SETUP ---
-try: conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
+try: 
+    conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
 except Exception as e: st.error(f"DB Error: {e}"); st.stop()
 
-# --- 4. TABS LAYOUT ---
+# --- TABS ---
 t1, t2, t3, t4, t5 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings", "📊 Snapshot", "🧠 Master Vault"])
 
 # ==========================================
@@ -50,18 +62,13 @@ with t5:
     st.subheader("🔐 Master Intelligence Vault")
     if st.text_input("Master Key", type="password", key="t5_pwd") == "Su22101992@":
         
-        # 1. Fetch Fresh Data
+        # Fetch Fresh Data
         today_str = datetime.now(IST).strftime('%Y-%m-%d')
-        raw_v = conn.table("sales").select("*").order('id', desc=True).limit(50000).execute()
-        vdf = pd.DataFrame(raw_v.data)
+        vdf = pd.DataFrame(conn.table("sales").select("*").order('id', desc=True).limit(50000).execute().data)
+        cafe_all = pd.DataFrame(conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute().data)
+        exp_df = pd.DataFrame(conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute().data)
         
-        cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
-        cafe_all = pd.DataFrame(cafe_res.data)
-        
-        exp_res = conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute()
-        exp_df = pd.DataFrame(exp_res.data)
-        
-        # 2. Process P&L Ledger
+        # Process P&L Ledger
         if not vdf.empty and not cafe_all.empty:
             vdf['date_obj'] = pd.to_datetime(vdf['date'].str[:10])
             cafe_all['date_obj'] = pd.to_datetime(cafe_all['date'].str[:10])
@@ -76,42 +83,41 @@ with t5:
             pnl['Net Revenue'] = pnl['pure_game'] + pnl['profit']
             pnl['Net Profit'] = pnl['Net Revenue'] - pnl['daily_expenses']
             
+            # THE FIX: Ensure index is datetime objects for comparison
+            pnl.index = pd.to_datetime(pnl.index)
+            
             # --- KPI CALCULATIONS ---
-            now = datetime.now(IST)
+            now = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
             start_tm = now.replace(day=1)
             start_lm = (start_tm - timedelta(days=1)).replace(day=1)
             start_tw = now - timedelta(days=now.weekday())
             start_lw = start_tw - timedelta(days=7)
             
             def get_stats(df, mask):
-                sub = df[mask]
-                return sub['Net Profit'].sum()
+                return df.loc[mask, 'Net Profit'].sum()
 
             prof_life = pnl['Net Profit'].sum()
             prof_mtd = get_stats(pnl, pnl.index >= start_tm)
             prof_lm = get_stats(pnl, (pnl.index >= start_lm) & (pnl.index < start_tm))
             prof_wtd = get_stats(pnl, pnl.index >= start_tw)
             prof_lw = get_stats(pnl, (pnl.index >= start_lw) & (pnl.index < start_tw))
-            prof_today = get_stats(pnl, pnl.index == now.normalize())
-            prof_last_week_day = get_stats(pnl, pnl.index == (now - timedelta(days=7)).normalize())
+            prof_today = get_stats(pnl, pnl.index == now)
+            prof_last_week_day = get_stats(pnl, pnl.index == (now - timedelta(days=7)))
 
             def fmt_delta(curr, prev):
-                pct = ((curr - prev) / prev * 100) if prev != 0 else 100
+                pct = ((curr - prev) / abs(prev) * 100) if prev != 0 else (100 if curr > 0 else 0)
                 return f"{pct:+.1f}%"
 
-            st.write("### 🚀 Executive Profit Performance")
+            st.write("### 🚀 Executive Profit Growth (KPIs)")
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Lifetime Net Profit", f"₹{prof_life:,.0f}")
             k2.metric("MTD Profit", f"₹{prof_mtd:,.0f}", fmt_delta(prof_mtd, prof_lm))
             k3.metric("WTD Profit", f"₹{prof_wtd:,.0f}", fmt_delta(prof_wtd, prof_lw))
-            k4.metric("Today vs Same Day Last Wk", f"₹{prof_today:,.0f}", fmt_delta(prof_today, prof_last_week_day))
+            k4.metric(f"Today vs Last Wk", f"₹{prof_today:,.0f}", fmt_delta(prof_today, prof_last_week_day))
 
             st.divider()
             st.write("### 🧮 Detailed Financial Matrix")
-            # Format P&L Display
             disp = pnl[['Net Revenue', 'daily_expenses', 'Net Profit']].copy().sort_index(ascending=False)
             disp.columns = ['Net Revenue (Gross Profit)', 'Expenses', 'Net Profit']
             st.dataframe(disp.style.format("₹{:,.0f}"), use_container_width=True)
-            
-            # Export
             st.download_button("📥 Export P&L to CSV", pnl.to_csv().encode('utf-8'), "pnl_report.csv")
