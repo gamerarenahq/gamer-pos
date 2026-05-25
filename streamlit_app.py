@@ -10,7 +10,6 @@ st.set_page_config(page_title="Gamerarena Master ERP", page_icon="🎮", layout=
 st_autorefresh(interval=60000, limit=None, key="crm_refresh")
 IST = pytz.timezone('Asia/Kolkata')
 
-# THE FIX: Custom Deep Dark & Glowing Ice Blue Gaming Theme
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; font-family: 'Inter', sans-serif; }
@@ -321,6 +320,36 @@ with t1:
                     new_total = float(get_price(sys_cat, new_dur, extra_c))
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.cache_data.clear(); st.rerun()
+        
+        # --- NEW FEATURE: Settle Unpaid Tabs ---
+        st.markdown("<hr style='border-color: #2D3748;'>", unsafe_allow_html=True)
+        st.subheader("💳 Settle Unpaid Tabs")
+        if not tab_df.empty:
+            unpaid_customers = tab_df['customer'].unique()
+            sel_unpaid_cust = st.selectbox("Select Gamer to Settle", unpaid_customers, key="t1_unpaid_sel")
+            
+            cust_tabs = tab_df[tab_df['customer'] == sel_unpaid_cust]
+            total_owed = cust_tabs['total'].sum()
+            
+            st.info(f"**{sel_unpaid_cust}** owes: **₹{total_owed:.0f}**")
+            
+            settle_pay = st.radio("Settle Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key=f"t1_settle_pay_{sel_unpaid_cust}")
+            
+            final_settle_meth = settle_pay
+            if settle_pay == "Split Payment":
+                settle_split_cash = st.number_input("Cash Portion (₹)", min_value=0.0, max_value=float(total_owed), value=float(total_owed)/2, step=10.0, key=f"t1_settle_split_{sel_unpaid_cust}")
+                st.caption(f"UPI Portion: ₹{total_owed - settle_split_cash:.0f}")
+                final_settle_meth = f"Split|{settle_split_cash}|{total_owed - settle_split_cash}"
+                
+            if st.button("✅ Settle Tab", use_container_width=True, key=f"t1_settle_btn_{sel_unpaid_cust}"):
+                for past_id in cust_tabs['id']:
+                    conn.table("sales").update({"method": final_settle_meth}).eq("id", int(past_id)).execute()
+                st.cache_data.clear()
+                st.success(f"{sel_unpaid_cust}'s tab settled successfully!")
+                st.rerun()
+        else:
+            st.caption("No unpaid tabs pending today.")
+            
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -627,6 +656,7 @@ with t5:
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
+            # --- 1. Compute Today's Critical Data for the Vault ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
                 if not cafe_today.empty:
