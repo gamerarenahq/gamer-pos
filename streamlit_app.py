@@ -48,8 +48,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 3. DATABASE SETUP ---
-try: 
-    conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
+try: conn = st.connection("supabase", type=SupabaseConnection, ttl=0)
 except Exception as e: st.error(f"DB Error: {e}"); st.stop()
 
 # --- TABS ---
@@ -62,19 +61,17 @@ with t5:
     st.subheader("🔐 Master Intelligence Vault")
     if st.text_input("Master Key", type="password", key="t5_pwd") == "Su22101992@":
         
-        # Fetch Fresh Data
+        # Fetch Data
         today_str = datetime.now(IST).strftime('%Y-%m-%d')
         vdf = pd.DataFrame(conn.table("sales").select("*").order('id', desc=True).limit(50000).execute().data)
         cafe_all = pd.DataFrame(conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute().data)
         exp_df = pd.DataFrame(conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute().data)
         
-        # Process P&L Ledger
         if not vdf.empty and not cafe_all.empty:
             vdf['date_obj'] = pd.to_datetime(vdf['date'].str[:10])
             cafe_all['date_obj'] = pd.to_datetime(cafe_all['date'].str[:10])
             exp_df['date_obj'] = pd.to_datetime(exp_df['expense_date'])
             
-            # Daily aggregates
             daily_game = vdf.groupby('date_obj').apply(lambda x: (x['total'] - x['fnb_total']).sum()).rename('pure_game')
             daily_cafe = cafe_all.groupby('date_obj').agg({'total_revenue': 'sum', 'profit': 'sum'})
             daily_exp = exp_df.groupby('date_obj')['amount'].sum().rename('daily_expenses')
@@ -83,10 +80,10 @@ with t5:
             pnl['Net Revenue'] = pnl['pure_game'] + pnl['profit']
             pnl['Net Profit'] = pnl['Net Revenue'] - pnl['daily_expenses']
             
-            # THE FIX: Ensure index is datetime objects for comparison
+            # --- THE FIX: FORCED DATETIME CONVERSION ---
             pnl.index = pd.to_datetime(pnl.index)
             
-            # --- KPI CALCULATIONS ---
+            # KPI Metrics
             now = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
             start_tm = now.replace(day=1)
             start_lm = (start_tm - timedelta(days=1)).replace(day=1)
@@ -113,11 +110,10 @@ with t5:
             k1.metric("Lifetime Net Profit", f"₹{prof_life:,.0f}")
             k2.metric("MTD Profit", f"₹{prof_mtd:,.0f}", fmt_delta(prof_mtd, prof_lm))
             k3.metric("WTD Profit", f"₹{prof_wtd:,.0f}", fmt_delta(prof_wtd, prof_lw))
-            k4.metric(f"Today vs Last Wk", f"₹{prof_today:,.0f}", fmt_delta(prof_today, prof_last_week_day))
+            k4.metric("Today vs Same Day Last Wk", f"₹{prof_today:,.0f}", fmt_delta(prof_today, prof_last_week_day))
 
             st.divider()
             st.write("### 🧮 Detailed Financial Matrix")
             disp = pnl[['Net Revenue', 'daily_expenses', 'Net Profit']].copy().sort_index(ascending=False)
             disp.columns = ['Net Revenue (Gross Profit)', 'Expenses', 'Net Profit']
             st.dataframe(disp.style.format("₹{:,.0f}"), use_container_width=True)
-            st.download_button("📥 Export P&L to CSV", pnl.to_csv().encode('utf-8'), "pnl_report.csv")
