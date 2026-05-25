@@ -321,7 +321,6 @@ with t1:
                     conn.table("sales").update({"total": new_total, "duration": new_dur}).eq("id", int(row['id'])).execute()
                     st.cache_data.clear(); st.rerun()
         
-        # --- NEW FEATURE: Settle Unpaid Tabs ---
         st.markdown("<hr style='border-color: #2D3748;'>", unsafe_allow_html=True)
         st.subheader("💳 Settle Unpaid Tabs")
         if not tab_df.empty:
@@ -656,7 +655,7 @@ with t5:
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
-            # --- 1. Compute Today's Critical Data for the Vault ---
+            # --- Compute Today's Data ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
                 if not cafe_today.empty:
@@ -695,11 +694,11 @@ with t5:
 
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
-            total_revenue = pure_game_rev + gross_fnb_profit
+            net_revenue_today = pure_game_rev + gross_fnb_profit
             
             st.write("### 📅 Today's Master Summary")
             c1, c2, c3 = st.columns(3)
-            c1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Net Revenue (Game + F&B Profit)<h2 style='color:#00D0FF'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
+            c1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Net Revenue (Gross Profit)<h2 style='color:#00D0FF'>₹{net_revenue_today:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             
@@ -722,7 +721,7 @@ b. UPI -  {total_bank_upi:,.0f}
 c. F&B sale - {gross_fnb_sale:,.0f}
 d. F&B profit- {gross_fnb_profit:,.0f}
 
-*A+B-C+D= Total  - {total_revenue:,.0f}*
+*A+B-C+D= Total  - {net_revenue_today:,.0f}*
 
 Breakup: 
 PS5- {ps_wa:,.0f}
@@ -745,16 +744,13 @@ SIM- {sim_wa:,.0f}"""
                             row_to_edit = today_all[today_all['id'] == edit_id].iloc[0]
                             with st.form("edit_session_form"):
                                 e_col1, e_col2, e_col3 = st.columns(3)
-                                
                                 current_meth = str(row_to_edit['method'])
                                 meth_options = ["Cash", "UPI", "Split Payment", "Master Tab", "Pending"]
                                 if current_meth not in meth_options and current_meth.startswith("Split|"):
                                     meth_options.append(current_meth)
-                                    
                                 n_meth = e_col1.selectbox("Payment Method", meth_options, index=meth_options.index(current_meth) if current_meth in meth_options else 0)
                                 n_tot = e_col2.number_input("Game Total (₹)", value=float(row_to_edit['total']))
                                 n_fnb = e_col3.number_input("F&B Total (₹)", value=float(row_to_edit['fnb_total']))
-                                
                                 if st.form_submit_button("Update Session in Database"):
                                     conn.table("sales").update({"method": n_meth, "total": float(n_tot), "fnb_total": float(n_fnb)}).eq("id", int(edit_id)).execute()
                                     st.cache_data.clear()
@@ -766,64 +762,38 @@ SIM- {sim_wa:,.0f}"""
                 st.info("No sessions recorded today yet.")
                 
             st.divider()
-            
-            st.write("### 📅 Custom Hardware Breakdown")
-            d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_hw_range")
-            if len(d_range_hw) == 2:
-                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range_hw]
-                if not vdf.empty:
-                    hw_filter = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt) & (vdf['status'] == 'Completed')].copy()
-                    
-                    if not hw_filter.empty:
-                        hw_filter['total'] = pd.to_numeric(hw_filter['total'], errors='coerce').fillna(0.0)
-                        hw_filter['fnb_total'] = pd.to_numeric(hw_filter['fnb_total'], errors='coerce').fillna(0.0)
-                        hw_filter['pure_game'] = hw_filter['total'] - hw_filter['fnb_total']
-                        
-                        hw_map = {"PS1":"PlayStation", "PS2":"PlayStation", "PS3":"PlayStation", 
-                                  "PC1":"PC", "PC2":"PC", "SIM1":"Simulator"}
-                        hw_filter['Category'] = hw_filter['system'].map(hw_map).fillna(hw_filter['system'])
-                        
-                        hw_group = hw_filter.groupby('Category')['pure_game'].sum()
-                        
-                        ps_rev = hw_group.get('PlayStation', 0.0)
-                        pc_rev = hw_group.get('PC', 0.0)
-                        sim_rev = hw_group.get('Simulator', 0.0)
-                        
-                        h1, h2, h3 = st.columns(3)
-                        h1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>PlayStation (PS1-PS3)<h2 style='color:#00D0FF'>₹{ps_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                        h2.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>PC (PC1-PC2)<h2 style='color:#00D0FF'>₹{pc_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                        h3.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Simulator (SIM1)<h2 style='color:#00D0FF'>₹{sim_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                    else:
-                        st.info("No completed gaming sessions found in this date range.")
-                else:
-                    st.info("No sales data available to analyze.")
 
-            st.divider()
-            st.write("### Export Data")
-            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_drange")
-            if len(d_range) == 2:
-                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
-                f_edf = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt)] if not vdf.empty else pd.DataFrame()
-                if not f_edf.empty:
-                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t5_export_btn")
+            # --- THE NEW EXECUTIVE REVENUE MATRIX ---
+            st.write("### 📈 Executive Revenue Matrix (P&L)")
             
-            st.divider()
-
             if not comp_df.empty:
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 
                 if not cafe_all_df.empty:
                     cafe_all_df['date_str'] = cafe_all_df['date'].str[:10]
                     cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df['total_revenue'], errors='coerce').fillna(0.0)
-                    daily_fnb = cafe_all_df.groupby('date_str')['total_revenue'].sum().reset_index()
+                    cafe_all_df['profit'] = pd.to_numeric(cafe_all_df['profit'], errors='coerce').fillna(0.0)
+                    daily_fnb = cafe_all_df.groupby('date_str').agg({'total_revenue': 'sum', 'profit': 'sum'}).reset_index()
                 else:
-                    daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue'])
+                    daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
 
                 master_ledger = pd.merge(daily_game, daily_fnb, on='date_str', how='outer').fillna(0.0)
-                master_ledger['Gross Income'] = master_ledger['pure_game'] + master_ledger['total_revenue']
+                
+                exp_raw = conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute()
+                exp_df = pd.DataFrame(exp_raw.data)
+                if not exp_df.empty:
+                    exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
+                    exp_summary = exp_df.groupby('expense_date')['amount'].sum().reset_index()
+                    exp_summary.rename(columns={'expense_date': 'date_str', 'amount': 'daily_expenses'}, inplace=True)
+                    master_ledger = pd.merge(master_ledger, exp_summary, on='date_str', how='outer').fillna(0.0)
+                else:
+                    master_ledger['daily_expenses'] = 0.0
 
-                revenue_df = master_ledger[['date_str', 'Gross Income']].rename(columns={'Gross Income': 'total'})
-                revenue_df['date_obj'] = pd.to_datetime(revenue_df['date_str'])
+                master_ledger['Gross Revenue'] = master_ledger['pure_game'] + master_ledger['total_revenue']
+                master_ledger['Net Revenue'] = master_ledger['pure_game'] + master_ledger['profit']
+                master_ledger['Net Profit'] = master_ledger['Net Revenue'] - master_ledger['daily_expenses']
+
+                master_ledger['date_obj'] = pd.to_datetime(master_ledger['date_str'])
 
                 now_d = datetime.now(IST).date()
                 start_tw = now_d - timedelta(days=now_d.weekday())
@@ -834,20 +804,29 @@ SIM- {sim_wa:,.0f}"""
                 end_lm = start_tm - timedelta(days=1)
                 start_lm = end_lm.replace(day=1)
 
-                wtd = revenue_df[revenue_df['date_obj'].dt.date >= start_tw]['total'].sum()
-                lw = revenue_df[(revenue_df['date_obj'].dt.date >= start_lw) & (revenue_df['date_obj'].dt.date <= end_lw)]['total'].sum()
-                mtd = revenue_df[revenue_df['date_obj'].dt.date >= start_tm]['total'].sum()
-                lm = revenue_df[(revenue_df['date_obj'].dt.date >= start_lm) & (revenue_df['date_obj'].dt.date <= end_lm)]['total'].sum()
-                lifetime = revenue_df['total'].sum()
+                periods = [
+                    ("Lifetime", master_ledger['date_obj'].notna()),
+                    ("This Month", master_ledger['date_obj'].dt.date >= start_tm),
+                    ("Last Month", (master_ledger['date_obj'].dt.date >= start_lm) & (master_ledger['date_obj'].dt.date <= end_lm)),
+                    ("This Week", master_ledger['date_obj'].dt.date >= start_tw),
+                    ("Last Week", (master_ledger['date_obj'].dt.date >= start_lw) & (master_ledger['date_obj'].dt.date <= end_lw))
+                ]
 
-                st.write("### 📈 Executive Revenue Dashboard")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Lifetime Gross", f"₹{lifetime:,.0f}")
-                c2.metric("This Month (MTD)", f"₹{mtd:,.0f}", delta=f"{((mtd-lm)/lm*100) if lm else 0:.1f}% vs Last Month")
-                c3.metric("Last Month", f"₹{lm:,.0f}")
-                c4.metric("This Week (WTD)", f"₹{wtd:,.0f}", delta=f"{((wtd-lw)/lw*100) if lw else 0:.1f}% vs Last Week")
-                c5.metric("Last Week", f"₹{lw:,.0f}")
-                
+                row_gross = {"Metric": "Gross Sales (Topline)"}
+                row_net_rev = {"Metric": "Net Revenue (Gross Profit)"}
+                row_exp = {"Metric": "Total Expenses"}
+                row_net_prof = {"Metric": "Net Profit (Bottom Line)"}
+
+                for p_name, p_mask in periods:
+                    p_df = master_ledger[p_mask]
+                    row_gross[p_name] = f"₹{p_df['Gross Revenue'].sum():,.0f}"
+                    row_net_rev[p_name] = f"₹{p_df['Net Revenue'].sum():,.0f}"
+                    row_exp[p_name] = f"₹{p_df['daily_expenses'].sum():,.0f}"
+                    row_net_prof[p_name] = f"₹{p_df['Net Profit'].sum():,.0f}"
+
+                exec_df = pd.DataFrame([row_gross, row_net_rev, row_exp, row_net_prof])
+                st.dataframe(exec_df, hide_index=True, use_container_width=True)
+
                 st.divider()
                 
                 st.write("### 🎮 Lifetime Hardware Breakdown (Pure Gaming)")
@@ -862,23 +841,13 @@ SIM- {sim_wa:,.0f}"""
                 hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
                 st.dataframe(hw_summary, hide_index=True, use_container_width=True)
 
-            st.divider()
+                st.divider()
 
-            if not vdf.empty:
                 st.subheader("📅 Day-Wise Profit & Loss Ledger")
-                tot_inc = revenue_df[['date_str', 'total']].rename(columns={'total': 'Gross Income'})
+                master_ledger_disp = master_ledger[['date_str', 'Gross Revenue', 'Net Revenue', 'daily_expenses', 'Net Profit']].copy()
+                master_ledger_disp.columns = ['Date', 'Gross Sales', 'Net Revenue', 'Expenses', 'Net Profit']
+                master_ledger_disp = master_ledger_disp.sort_values('Date', ascending=False)
                 
-                exp_raw = conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute()
-                exp_df = pd.DataFrame(exp_raw.data)
-                if not exp_df.empty:
-                    exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
-                    exp_summary = exp_df.groupby('expense_date')['amount'].sum().rename('Total Expenses').reset_index()
-                    master_ledger = pd.merge(tot_inc, exp_summary, left_on='date_str', right_on='expense_date', how='outer').fillna(0)
-                else:
-                    master_ledger = tot_inc; master_ledger['Total Expenses'] = 0
-                
-                master_ledger['Net Profit'] = master_ledger['Gross Income'] - master_ledger['Total Expenses']
-                master_ledger = master_ledger.sort_values('date_str', ascending=False)
-                st.dataframe(master_ledger[['date_str', 'Gross Income', 'Total Expenses', 'Net Profit']], hide_index=True, use_container_width=True)
+                st.dataframe(master_ledger_disp, hide_index=True, use_container_width=True)
 
         except Exception as e: st.error(f"Vault processing error: {e}")
