@@ -182,19 +182,20 @@ except Exception as e:
     db_df = pd.DataFrame(columns=db_cols)
     tab_df = pd.DataFrame(columns=db_cols)
 
-# --- 4. TABS LAYOUT (Modified: Removed Daily Snapshot) ---
+# --- 4. TABS LAYOUT (Reduced to 4 Tabs) ---
 t1, t2, t3, t4 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings & Queue", "🧠 Master Vault"])
 
 # ==========================================
 # TAB 1: LIVE FLOOR & CHECKOUT
 # ==========================================
 with t1:
+    
     # --- PENDING ON FLOOR METRIC ---
     pending_floor = 0.0
     if not db_df.empty:
         pending_floor = pd.to_numeric(db_df[db_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
         
-    st.markdown(f"<div class='metric-box' style='border-color:#FF754C; padding: 15px; margin-bottom: 20px;'>Pending on Floor<h2 style='color:#FF754C; margin:0;'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-box' style='border-color:#FF754C; padding: 15px; margin-bottom: 25px; background:#1A2235;'>Pending on Floor<h2 style='color:#FF754C; margin:0;'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
 
     col_floor, col_op = st.columns([2.5, 1], gap="large")
     active_gamers = db_df[db_df['status'] == 'Active'] if not db_df.empty else pd.DataFrame()
@@ -427,10 +428,18 @@ with t2:
                         final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
+                    
+                    # THE FIX: Group inventory items so duplicates are accurately deducted
+                    stock_deductions = {}
                     for item in st.session_state.fnb_cart:
                         if item.get('track_stock', False) and item['id'] != 'byob':
-                            cur_stock = inv_df[inv_df['id'] == item['id']].iloc[0]['stock_level']
-                            conn.table("inventory").update({"stock_level": int(cur_stock - 1)}).eq("id", item['id']).execute()
+                            i_id = item['id']
+                            stock_deductions[i_id] = stock_deductions.get(i_id, 0) + 1
+                            
+                    for i_id, qty_sold in stock_deductions.items():
+                        cur_stock = inv_df[inv_df['id'] == i_id].iloc[0]['stock_level']
+                        conn.table("inventory").update({"stock_level": int(cur_stock - qty_sold)}).eq("id", i_id).execute()
+                        
                     conn.table("cafe_orders").insert({
                         "date": datetime.now(IST).strftime('%Y-%m-%d'), "items": items_str, 
                         "total_revenue": float(tot_sell), "total_cost": float(tot_cost), "profit": float(tot_sell - tot_cost),
@@ -618,7 +627,7 @@ with t4:
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
-            # --- Compute Today's Data ---
+            # --- 1. Compute Today's Critical Data for the Vault ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
                 if not cafe_today.empty:
@@ -707,13 +716,16 @@ SIM- {sim_wa:,.0f}"""
                             row_to_edit = today_all[today_all['id'] == edit_id].iloc[0]
                             with st.form("edit_session_form"):
                                 e_col1, e_col2, e_col3 = st.columns(3)
+                                
                                 current_meth = str(row_to_edit['method'])
                                 meth_options = ["Cash", "UPI", "Split Payment", "Master Tab", "Pending"]
                                 if current_meth not in meth_options and current_meth.startswith("Split|"):
                                     meth_options.append(current_meth)
+                                    
                                 n_meth = e_col1.selectbox("Payment Method", meth_options, index=meth_options.index(current_meth) if current_meth in meth_options else 0)
                                 n_tot = e_col2.number_input("Game Total (₹)", value=float(row_to_edit['total']))
                                 n_fnb = e_col3.number_input("F&B Total (₹)", value=float(row_to_edit['fnb_total']))
+                                
                                 if st.form_submit_button("Update Session in Database"):
                                     conn.table("sales").update({"method": n_meth, "total": float(n_tot), "fnb_total": float(n_fnb)}).eq("id", int(edit_id)).execute()
                                     st.cache_data.clear()
@@ -732,6 +744,7 @@ SIM- {sim_wa:,.0f}"""
                 s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range_hw]
                 if not vdf.empty:
                     hw_filter = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt) & (vdf['status'] == 'Completed')].copy()
+                    
                     if not hw_filter.empty:
                         hw_filter['total'] = pd.to_numeric(hw_filter['total'], errors='coerce').fillna(0.0)
                         hw_filter['fnb_total'] = pd.to_numeric(hw_filter['fnb_total'], errors='coerce').fillna(0.0)
@@ -742,6 +755,7 @@ SIM- {sim_wa:,.0f}"""
                         hw_filter['Category'] = hw_filter['system'].map(hw_map).fillna(hw_filter['system'])
                         
                         hw_group = hw_filter.groupby('Category')['pure_game'].sum()
+                        
                         ps_rev = hw_group.get('PlayStation', 0.0)
                         pc_rev = hw_group.get('PC', 0.0)
                         sim_rev = hw_group.get('Simulator', 0.0)
@@ -752,6 +766,9 @@ SIM- {sim_wa:,.0f}"""
                         h3.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Simulator (SIM1)<h2 style='color:#00D0FF'>₹{sim_rev:,.0f}</h2></div>", unsafe_allow_html=True)
                     else:
                         st.info("No completed gaming sessions found in this date range.")
+                else:
+                    st.info("No sales data available to analyze.")
+
             st.divider()
             st.write("### Export Data")
             d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_drange")
