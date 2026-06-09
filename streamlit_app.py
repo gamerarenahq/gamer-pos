@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 
 # --- 1. CONFIG & UI THEME ---
 st.set_page_config(page_title="Gamerarena Master ERP", page_icon="🎮", layout="wide")
@@ -97,6 +98,22 @@ with st.sidebar:
     if st.button("🔄 Force Sync Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
+        
+    # THE FIX: Button to request browser notification permissions natively
+    if st.button("🔔 Enable Browser Alerts", use_container_width=True):
+        js_perm = """
+        <script>
+        if ("Notification" in window) {
+            Notification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    new Notification("Alerts Enabled!", {body: "You will now get pop-ups when sessions end."});
+                }
+            });
+        }
+        </script>
+        """
+        components.html(js_perm, height=0, width=0)
+        
     if st.button("🔒 Lock Screen", use_container_width=True):
         st.session_state.auth = False
         st.rerun()
@@ -205,11 +222,17 @@ with t1:
         if active_gamers.empty: st.info("Floor is clear.")
         else:
             grid = st.columns(3)
+            alerts_this_cycle = [] # THE FIX: List to hold our notification data
+            
             for i, (_, row) in enumerate(active_gamers.iterrows()):
                 try:
                     entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
+
+                # THE FIX: If they drop to 2 mins, or are up to 10 mins overdue, queue an alert!
+                if time_left <= 2.0 and time_left > -10.0:
+                    alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - {int(time_left)}m left")
 
                 if time_left < 0: 
                     b_col = "#EF4444"
@@ -247,6 +270,31 @@ with t1:
                     f"</div>"
                 )
                 with grid[i % 3]: st.markdown(card_html, unsafe_allow_html=True)
+
+        # THE FIX: Trigger the alerts immediately below the grid!
+        if alerts_this_cycle:
+            # 1. Native Streamlit Popups
+            for alert_msg in alerts_this_cycle:
+                st.toast(f"🚨 Time Alert: {alert_msg}", icon="⚠️")
+                
+            # 2. OS-Level Browser Notifications via injected JS
+            js_alert_text = "\\n".join(alerts_this_cycle)
+            js_code = f"""
+            <script>
+            function triggerNotification() {{
+                if (!("Notification" in window)) return;
+                if (Notification.permission === "granted") {{
+                    new Notification("🎮 Gamerarena Alert", {{
+                        body: "{js_alert_text}",
+                        requireInteraction: true
+                    }});
+                }}
+            }}
+            try {{ window.parent.triggerNotification = triggerNotification; window.parent.triggerNotification(); }} 
+            catch(e) {{ triggerNotification(); }}
+            </script>
+            """
+            components.html(js_code, height=0, width=0)
 
     with col_op:
         st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
@@ -627,7 +675,7 @@ with t4:
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data)
             
-            # --- 1. Compute Today's Critical Data for the Vault ---
+            # --- Compute Today's Data ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(today_str)].copy()
                 if not cafe_today.empty:
