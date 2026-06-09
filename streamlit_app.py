@@ -99,7 +99,6 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
         
-    # THE FIX: Button to request browser notification permissions natively
     if st.button("🔔 Enable Browser Alerts", use_container_width=True):
         js_perm = """
         <script>
@@ -219,20 +218,26 @@ with t1:
     
     with col_floor:
         st.subheader("Active Sessions")
-        if active_gamers.empty: st.info("Floor is clear.")
+        
+        # THE FIX: Defined outside the condition so it always exists!
+        alerts_this_cycle = [] 
+        
+        if active_gamers.empty: 
+            st.info("Floor is clear.")
         else:
             grid = st.columns(3)
-            alerts_this_cycle = [] # THE FIX: List to hold our notification data
-            
             for i, (_, row) in enumerate(active_gamers.iterrows()):
                 try:
                     entry_dt = pd.to_datetime(f"{row['date'][:10]} {row['entry_time']}").tz_localize(IST)
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
 
-                # THE FIX: If they drop to 2 mins, or are up to 10 mins overdue, queue an alert!
+                # THE OVERDUE LOGIC FIX
                 if time_left <= 2.0 and time_left > -10.0:
-                    alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - {int(time_left)}m left")
+                    if time_left < 0:
+                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - 🚨 {abs(int(time_left))}m OVERDUE!")
+                    else:
+                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - ⏳ {int(time_left)}m left")
 
                 if time_left < 0: 
                     b_col = "#EF4444"
@@ -271,13 +276,11 @@ with t1:
                 )
                 with grid[i % 3]: st.markdown(card_html, unsafe_allow_html=True)
 
-        # THE FIX: Trigger the alerts immediately below the grid!
+        # Trigger Notifications if any exist
         if alerts_this_cycle:
-            # 1. Native Streamlit Popups
             for alert_msg in alerts_this_cycle:
-                st.toast(f"🚨 Time Alert: {alert_msg}", icon="⚠️")
+                st.toast(f"Time Alert: {alert_msg}", icon="⚠️")
                 
-            # 2. OS-Level Browser Notifications via injected JS
             js_alert_text = "\\n".join(alerts_this_cycle)
             js_code = f"""
             <script>
@@ -476,8 +479,6 @@ with t2:
                         final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
-                    
-                    # THE FIX: Group inventory items so duplicates are accurately deducted
                     stock_deductions = {}
                     for item in st.session_state.fnb_cart:
                         if item.get('track_stock', False) and item['id'] != 'byob':
