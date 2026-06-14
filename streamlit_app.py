@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
 
 # --- 1. CONFIG & UI THEME ---
 st.set_page_config(page_title="Gamerarena Master ERP", page_icon="🎮", layout="wide")
@@ -98,21 +97,6 @@ with st.sidebar:
     if st.button("🔄 Force Sync Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
-        
-    if st.button("🔔 Enable Browser Alerts", use_container_width=True):
-        js_perm = """
-        <script>
-        if ("Notification" in window) {
-            Notification.requestPermission().then(permission => {
-                if (permission === "granted") {
-                    new Notification("Alerts Enabled!", {body: "You will now get pop-ups when sessions end."});
-                }
-            });
-        }
-        </script>
-        """
-        components.html(js_perm, height=0, width=0)
-        
     if st.button("🔒 Lock Screen", use_container_width=True):
         st.session_state.auth = False
         st.rerun()
@@ -192,36 +176,47 @@ try:
     if not tab_df.empty:
         tab_df['total'] = pd.to_numeric(tab_df['total'], errors='coerce').fillna(0.0)
         
+    # --- FETCH CAFE DATA FOR REAL-TIME HUNGER MONKEY PAYOUTS ---
+    cafe_res_today = conn.table("cafe_orders").select("*").eq("date", today_str_query).limit(10000).execute()
+    cafe_today_df = pd.DataFrame(cafe_res_today.data) if cafe_res_today.data else pd.DataFrame()
+    
 except Exception as e:
     st.error(f"Syncing Database... {e}")
     inv_df = pd.DataFrame(columns=inv_cols)
     db_df = pd.DataFrame(columns=db_cols)
     tab_df = pd.DataFrame(columns=db_cols)
+    cafe_today_df = pd.DataFrame()
 
-# --- 4. TABS LAYOUT (Reduced to 4 Tabs) ---
+# --- 4. TABS LAYOUT ---
 t1, t2, t3, t4 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings & Queue", "🧠 Master Vault"])
 
 # ==========================================
 # TAB 1: LIVE FLOOR & CHECKOUT
 # ==========================================
 with t1:
+    # --- METRICS HEADER ---
+    m_col1, m_col2 = st.columns(2)
     
-    # --- PENDING ON FLOOR METRIC ---
+    # 1. Pending on Floor Calculation
     pending_floor = 0.0
     if not db_df.empty:
         pending_floor = pd.to_numeric(db_df[db_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
         
-    st.markdown(f"<div class='metric-box' style='border-color:#FF754C; padding: 15px; margin-bottom: 25px; background:#1A2235;'>Pending on Floor<h2 style='color:#FF754C; margin:0;'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
+    m_col1.markdown(f"<div class='metric-box' style='border-color:#FF754C; padding: 15px; margin-bottom: 25px; background:#1A2235;'>Pending on Floor<h2 style='color:#FF754C; margin:0;'>₹{pending_floor:,.0f}</h2></div>", unsafe_allow_html=True)
+
+    # 2. Real-Time Hunger Monkey Payout Calculation
+    hm_payout_today = 0.0
+    if not cafe_today_df.empty:
+        cafe_today_df['total_cost'] = pd.to_numeric(cafe_today_df['total_cost'], errors='coerce').fillna(0.0)
+        hm_payout_today = cafe_today_df['total_cost'].sum()
+        
+    m_col2.markdown(f"<div class='metric-box' style='border-color:#00D0FF; padding: 15px; margin-bottom: 25px; background:#1A2235;'>Today's Payout to Hunger Monkey<h2 style='color:#00D0FF; margin:0;'>₹{hm_payout_today:,.0f}</h2></div>", unsafe_allow_html=True)
 
     col_floor, col_op = st.columns([2.5, 1], gap="large")
     active_gamers = db_df[db_df['status'] == 'Active'] if not db_df.empty else pd.DataFrame()
     
     with col_floor:
         st.subheader("Active Sessions")
-        
-        # THE FIX: Defined completely outside the condition so it NEVER causes a NameError on an empty floor!
-        alerts_this_cycle = [] 
-        
         if active_gamers.empty: 
             st.info("Floor is clear.")
         else:
@@ -232,26 +227,14 @@ with t1:
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
 
-                if time_left <= 2.0 and time_left > -10.0:
-                    if time_left < 0:
-                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - 🚨 {abs(int(time_left))}m OVERDUE!")
-                    else:
-                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - ⏳ {int(time_left)}m left")
-
                 if time_left < 0: 
-                    b_col = "#EF4444"
-                    bg_col = "#2D1E1E"
-                    t_col = "#EF4444"
+                    b_col = "#EF4444"; bg_col = "#2D1E1E"; t_col = "#EF4444"
                     txt = f"🚨 {abs(int(time_left))}m OVERDUE"
                 elif time_left <= 10: 
-                    b_col = "#FF754C"
-                    bg_col = "#2D231E"
-                    t_col = "#FF754C"
+                    b_col = "#FF754C"; bg_col = "#2D231E"; t_col = "#FF754C"
                     txt = f"⚠️ {int(time_left)}m LEFT"
                 else: 
-                    b_col = "#00D0FF"
-                    bg_col = "#121824"
-                    t_col = "#00D0FF"
+                    b_col = "#00D0FF"; bg_col = "#121824"; t_col = "#00D0FF"
                     txt = f"⏳ {int(time_left)}m left"
                 
                 fnb_val = float(row.get('fnb_total') or 0.0)
@@ -274,28 +257,6 @@ with t1:
                     f"</div>"
                 )
                 with grid[i % 3]: st.markdown(card_html, unsafe_allow_html=True)
-
-        if alerts_this_cycle:
-            for alert_msg in alerts_this_cycle:
-                st.toast(f"Time Alert: {alert_msg}", icon="⚠️")
-                
-            js_alert_text = "\\n".join(alerts_this_cycle)
-            js_code = f"""
-            <script>
-            function triggerNotification() {{
-                if (!("Notification" in window)) return;
-                if (Notification.permission === "granted") {{
-                    new Notification("🎮 Gamerarena Alert", {{
-                        body: "{js_alert_text}",
-                        requireInteraction: true
-                    }});
-                }}
-            }}
-            try {{ window.parent.triggerNotification = triggerNotification; window.parent.triggerNotification(); }} 
-            catch(e) {{ triggerNotification(); }}
-            </script>
-            """
-            components.html(js_code, height=0, width=0)
 
     with col_op:
         st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
@@ -670,26 +631,24 @@ with t4:
             raw_v = conn.table("sales").select("*").order('id', desc=True).limit(50000).execute()
             vdf = pd.DataFrame(raw_v.data)
             
-            cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
-            cafe_all_df = pd.DataFrame(cafe_res.data)
-
             # --- SELECT REPORT DATE ---
             st.write("### 📅 Daily Performance Report")
             report_date = st.date_input("Select Date for Summary", value=datetime.now(IST).date(), key="t4_rep_date")
             rep_date_str = report_date.strftime('%Y-%m-%d')
             
             # --- Compute Target Day's Data ---
-            if not cafe_all_df.empty:
-                cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(rep_date_str)].copy()
-                if not cafe_today.empty:
-                    cafe_today['total_revenue'] = pd.to_numeric(cafe_today['total_revenue'], errors='coerce').fillna(0.0)
-                    cafe_today['profit'] = pd.to_numeric(cafe_today['profit'], errors='coerce').fillna(0.0)
-                    gross_fnb_sale = cafe_today['total_revenue'].sum()
-                    gross_fnb_profit = cafe_today['profit'].sum()
-                    direct_fnb_df = cafe_today[cafe_today['method'] != 'Tab']
-                    direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
-                else:
-                    gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+            if not cafe_today_df.empty:
+                cafe_target_day = cafe_today_df if rep_date_str == datetime.now(IST).strftime('%Y-%m-%d') else pd.DataFrame(conn.table("cafe_orders").select("*").eq("date", rep_date_str).limit(10000).execute().data)
+            else:
+                cafe_target_day = pd.DataFrame(conn.table("cafe_orders").select("*").eq("date", rep_date_str).limit(10000).execute().data)
+
+            if not cafe_target_day.empty:
+                cafe_target_day['total_revenue'] = pd.to_numeric(cafe_target_day['total_revenue'], errors='coerce').fillna(0.0)
+                cafe_target_day['profit'] = pd.to_numeric(cafe_target_day['profit'], errors='coerce').fillna(0.0)
+                gross_fnb_sale = cafe_target_day['total_revenue'].sum()
+                gross_fnb_profit = cafe_target_day['profit'].sum()
+                direct_fnb_df = cafe_target_day[cafe_target_day['method'] != 'Tab']
+                direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
             else:
                 gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
 
@@ -719,6 +678,7 @@ with t4:
             total_bank_upi = checkout_upi + direct_fnb_upi
             total_revenue = pure_game_rev + gross_fnb_profit
             
+            st.write(f"### 📊 {report_date.strftime('%b %d')} Overview Summary")
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Net Revenue (Game + F&B Profit)<h2 style='color:#00D0FF'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
@@ -765,7 +725,6 @@ SIM- {sim_wa:,.0f}"""
                             row_to_edit = today_all[today_all['id'] == edit_id].iloc[0]
                             with st.form("edit_session_form"):
                                 e_col1, e_col2, e_col3 = st.columns(3)
-                                
                                 current_meth = str(row_to_edit['method'])
                                 meth_options = ["Cash", "UPI", "Split Payment", "Master Tab", "Pending"]
                                 if current_meth not in meth_options and current_meth.startswith("Split|"):
@@ -787,7 +746,7 @@ SIM- {sim_wa:,.0f}"""
 
             st.divider()
 
-            # --- THE RESTORED & UPGRADED EXECUTIVE P&L MATRIX ---
+            # --- THE EXECUTIVE P&L MATRIX ---
             st.write("### 📈 Executive Revenue Dashboard")
             
             if not comp_df.empty:
