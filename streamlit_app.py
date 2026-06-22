@@ -64,6 +64,7 @@ st.markdown("""
         border-radius: 10px; 
         color: #E2E8F0 !important;
         transition: 0.2s;
+        white-space: pre-line;
     }
     .menu-btn>button:hover { 
         border-color: #00D0FF; 
@@ -98,21 +99,6 @@ with st.sidebar:
     if st.button("🔄 Force Sync Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
-        
-    if st.button("🔔 Enable Browser Alerts", use_container_width=True):
-        js_perm = """
-        <script>
-        if ("Notification" in window) {
-            Notification.requestPermission().then(permission => {
-                if (permission === "granted") {
-                    new Notification("Alerts Enabled!", {body: "You will now get pop-ups when sessions end."});
-                }
-            });
-        }
-        </script>
-        """
-        components.html(js_perm, height=0, width=0)
-        
     if st.button("🔒 Lock Screen", use_container_width=True):
         st.session_state.auth = False
         st.rerun()
@@ -177,8 +163,22 @@ db_cols = ["id", "customer", "phone", "system", "duration", "total", "method", "
 
 try:
     inv_res = conn.table("inventory").select("*").order('item_name').limit(10000).execute()
-    inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
+    raw_inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
     
+    # Apply dynamic catalog overrides for French Fries parameters safely
+    inv_df = raw_inv_df.copy()
+    if not inv_df.empty:
+        for idx, r in inv_df.iterrows():
+            nm = str(r['item_name']).strip().lower()
+            if nm == "salted french fries":
+                inv_df.at[idx, 'selling_price'] = 140.0; inv_df.at[idx, 'cost_price'] = 120.0
+            elif nm in ["peri-peri french fries", "peri peri french fries"]:
+                inv_df.at[idx, 'selling_price'] = 160.0; inv_df.at[idx, 'cost_price'] = 150.0
+            elif nm in ["chilly garlic french fries", "chili garlic french fries"]:
+                inv_df.at[idx, 'selling_price'] = 170.0; inv_df.at[idx, 'cost_price'] = 160.0
+            elif nm == "cheesy fries":
+                inv_df.at[idx, 'selling_price'] = 180.0; inv_df.at[idx, 'cost_price'] = 170.0
+
     active_res = conn.table("sales").select("*").in_("status", ["Active", "Booked"]).order('id', desc=True).limit(10000).execute()
     db_df = pd.DataFrame(active_res.data) if active_res.data else pd.DataFrame(columns=db_cols)
     
@@ -198,7 +198,15 @@ except Exception as e:
     db_df = pd.DataFrame(columns=db_cols)
     tab_df = pd.DataFrame(columns=db_cols)
 
-# --- 4. TABS LAYOUT (Exactly 4 Tabs) ---
+# Define 4 brand new combo structural models explicitly
+SPECIAL_MEALS = [
+    {"id": "spec_tt", "item_name": "Tikki Tango Meal (W/O)", "selling_price": 175.0, "cost_price": 129.0, "category": "Burgers & Meals", "track_stock": False},
+    {"id": "spec_pp", "item_name": "Peri Peri Mini Meal (W/O)", "selling_price": 205.0, "cost_price": 149.0, "category": "Burgers & Meals", "track_stock": False},
+    {"id": "spec_pan", "item_name": "Paneer Pataka Meal (W/O)", "selling_price": 205.0, "cost_price": 149.0, "category": "Burgers & Meals", "track_stock": False},
+    {"id": "spec_bc", "item_name": "Big Crunch Meal (W/O)", "selling_price": 215.0, "cost_price": 159.0, "category": "Burgers & Meals", "track_stock": False}
+]
+
+# --- 4. TABS LAYOUT ---
 t1, t2, t3, t4 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Bookings & Queue", "🧠 Master Vault"])
 
 # ==========================================
@@ -217,11 +225,7 @@ with t1:
     
     with col_floor:
         st.subheader("Active Sessions")
-        
-        alerts_this_cycle = [] 
-        
-        if active_gamers.empty: 
-            st.info("Floor is clear.")
+        if active_gamers.empty: st.info("Floor is clear.")
         else:
             grid = st.columns(3)
             for i, (_, row) in enumerate(active_gamers.iterrows()):
@@ -230,26 +234,14 @@ with t1:
                     time_left = ((entry_dt + timedelta(hours=row['duration'])) - datetime.now(IST)).total_seconds() / 60.0
                 except: time_left = 999 
 
-                if time_left <= 2.0 and time_left > -10.0:
-                    if time_left < 0:
-                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - 🚨 {abs(int(time_left))}m OVERDUE!")
-                    else:
-                        alerts_this_cycle.append(f"{row['system']} ({row['customer']}) - ⏳ {int(time_left)}m left")
-
                 if time_left < 0: 
-                    b_col = "#EF4444"
-                    bg_col = "#2D1E1E"
-                    t_col = "#EF4444"
+                    b_col = "#EF4444"; bg_col = "#2D1E1E"; t_col = "#EF4444"
                     txt = f"🚨 {abs(int(time_left))}m OVERDUE"
                 elif time_left <= 10: 
-                    b_col = "#FF754C"
-                    bg_col = "#2D231E"
-                    t_col = "#FF754C"
+                    b_col = "#FF754C"; bg_col = "#2D231E"; t_col = "#FF754C"
                     txt = f"⚠️ {int(time_left)}m LEFT"
                 else: 
-                    b_col = "#00D0FF"
-                    bg_col = "#121824"
-                    t_col = "#00D0FF"
+                    b_col = "#00D0FF"; bg_col = "#121824"; t_col = "#00D0FF"
                     txt = f"⏳ {int(time_left)}m left"
                 
                 fnb_val = float(row.get('fnb_total') or 0.0)
@@ -272,28 +264,6 @@ with t1:
                     f"</div>"
                 )
                 with grid[i % 3]: st.markdown(card_html, unsafe_allow_html=True)
-
-        if alerts_this_cycle:
-            for alert_msg in alerts_this_cycle:
-                st.toast(f"Time Alert: {alert_msg}", icon="⚠️")
-                
-            js_alert_text = "\\n".join(alerts_this_cycle)
-            js_code = f"""
-            <script>
-            function triggerNotification() {{
-                if (!("Notification" in window)) return;
-                if (Notification.permission === "granted") {{
-                    new Notification("🎮 Gamerarena Alert", {{
-                        body: "{js_alert_text}",
-                        requireInteraction: true
-                    }});
-                }}
-            }}
-            try {{ window.parent.triggerNotification = triggerNotification; window.parent.triggerNotification(); }} 
-            catch(e) {{ triggerNotification(); }}
-            </script>
-            """
-            components.html(js_code, height=0, width=0)
 
     with col_op:
         st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
@@ -338,9 +308,9 @@ with t1:
                 calc_total = dyn_game_bill + food_bill + past_tab_amt
                 
                 if past_tab_amt > 0:
-                    st.markdown(f"<small style='color:#9CA3AF;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></small>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='color:#9CA3AF; font-size:12px;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></div>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='color:#9CA3AF; font-size:12px;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</div>", unsafe_allow_html=True)
 
                 final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=1.0, key=f"t1_final_tot_{db_state_key}_{f_dur}_{calc_total}")
                 
@@ -356,11 +326,25 @@ with t1:
                     final_method_str = "Master Tab"
                 
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{db_state_key}"):
-                    if final_method_str != "Master Tab" and not past_tabs.empty:
+                    current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
+                    
+                    # Pro-rate split payment across past entries to stop total cash duplicate calculations
+                    if final_method_str.startswith("Split|") and not past_tabs.empty:
+                        pts = final_method_str.split('|')
+                        t_cash_p = float(pts[1])
+                        t_upi_p = float(pts[2])
+                        denom = final_total if final_total > 0 else 1.0
+                        
+                        for past_row in past_tabs.itertuples():
+                            frac = float(past_row.total) / denom
+                            conn.table("sales").update({"method": f"Split|{t_cash_p*frac:.2f}|{t_upi_p*frac:.2f}"}).eq("id", int(past_row.id)).execute()
+                            
+                        frac_curr = current_row_final / denom
+                        final_method_str = f"Split|{t_cash_p*frac_curr:.2f}|{t_upi_p*frac_curr:.2f}"
+                    elif final_method_str != "Master Tab" and not past_tabs.empty:
                         for past_id in past_tabs['id']:
                             conn.table("sales").update({"method": final_method_str}).eq("id", int(past_id)).execute()
                     
-                    current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
                     conn.table("sales").update({"status": "Completed", "method": final_method_str, "duration": float(f_dur), "total": float(current_row_final)}).eq("id", int(row['id'])).execute()
                     st.cache_data.clear(); st.balloons(); st.rerun()
                     
@@ -396,14 +380,20 @@ with t1:
                 final_settle_meth = f"Split|{settle_split_cash}|{total_owed - settle_split_cash}"
                 
             if st.button("✅ Settle Tab", use_container_width=True, key=f"t1_settle_btn_{sel_unpaid_cust}"):
-                for past_id in cust_tabs['id']:
-                    conn.table("sales").update({"method": final_settle_meth}).eq("id", int(past_id)).execute()
-                st.cache_data.clear()
-                st.success(f"{sel_unpaid_cust}'s tab settled successfully!")
-                st.rerun()
-        else:
-            st.caption("No unpaid tabs pending today.")
-            
+                # Pro-rate split payment fractions accurately to prevent cash inflation
+                if final_settle_meth.startswith("Split|"):
+                    pts = final_settle_meth.split('|')
+                    t_cash_p = float(pts[1])
+                    t_upi_p = float(pts[2])
+                    denom = total_owed if total_owed > 0 else 1.0
+                    for past_row in cust_tabs.itertuples():
+                        frac = float(past_row.total) / denom
+                        conn.table("sales").update({"method": f"Split|{t_cash_p*frac:.2f}|{t_upi_p*frac:.2f}"}).eq("id", int(past_row.id)).execute()
+                else:
+                    for past_id in cust_tabs['id']:
+                        conn.table("sales").update({"method": final_settle_meth}).eq("id", int(past_id)).execute()
+                st.cache_data.clear(); st.success(f"{sel_unpaid_cust}'s tab settled successfully!"); st.rerun()
+        else: st.caption("No unpaid tabs pending today.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -415,57 +405,103 @@ with t2:
     with pos_tab:
         col_menu, col_cart = st.columns([2.5, 1], gap="large")
         with col_menu:
-            if inv_df.empty: st.warning("Inventory is empty. Go to the Stock tab to add items.")
-            else:
-                cat_list = inv_df['category'].dropna().unique()
-                for cat in cat_list:
-                    with st.expander(f"📌 {cat}", expanded=(cat in ['Burgers & Meals', 'Fries & Snacks'])):
-                        cat_items = inv_df[inv_df['category'] == cat]
-                        grid = st.columns(4)
-                        for i, (_, r) in enumerate(cat_items.iterrows()):
-                            st.markdown("<div class='menu-btn'>", unsafe_allow_html=True)
-                            track_stock = cat not in VENDOR_CATS
-                            is_disabled = track_stock and r['stock_level'] <= 0
-                            stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
-                            label = f"{r['item_name']}\n₹{r['selling_price']:.0f}{stock_label}"
-                            if grid[i % 4].button(label, key=f"fnb_{r['id']}", disabled=is_disabled, use_container_width=True):
-                                st.session_state.fnb_cart.append({"id": r['id'], "name": r['item_name'], "price": r['selling_price'], "cost": r['cost_price'], "track_stock": track_stock})
-                                st.rerun()
-                            st.markdown("</div>", unsafe_allow_html=True)
+            # Render special customized meals inside Burgers & Meals
+            all_rendered_cats = ["Burgers & Meals", "Fries & Snacks"]
+            if not inv_df.empty:
+                existing_db_cats = inv_df['category'].dropna().unique().tolist()
+                all_rendered_cats = sorted(list(set(all_rendered_cats + existing_db_cats)))
                 
-                with st.expander("🍟 BYOB (Build Your Own Bag)"):
-                    chip_choice = st.selectbox("Base Chips", ["Blue Lays", "Kurkure", "Doritos", "Uncle Chipps"], key="t2_byob_chips")
-                    has_cheese = st.checkbox("Add Cheese (+₹30)", key="t2_byob_cheese")
-                    byob_p = 140 if has_cheese else 110
-                    byob_c = 105 if has_cheese else 75
-                    if st.button(f"Add BYOB (₹{byob_p})", key="t2_byob_btn"):
-                        txt = f"BYOB ({chip_choice} {'w/ Cheese' if has_cheese else ''})"
-                        st.session_state.fnb_cart.append({"id": "byob", "name": txt, "price": byob_p, "cost": byob_c, "track_stock": False})
-                        st.rerun()
+            for cat in all_rendered_cats:
+                with st.expander(f"📌 {cat}", expanded=(cat in ['Burgers & Meals', 'Fries & Snacks'])):
+                    cat_items = inv_df[inv_df['category'] == cat].to_dict('records') if not inv_df.empty else []
+                    if cat == "Burgers & Meals":
+                        cat_items = SPECIAL_MEALS + cat_items
+                        
+                    if not cat_items:
+                        st.caption("No items added yet.")
+                        continue
+                        
+                    grid = st.columns(4)
+                    for i, r in enumerate(cat_items):
+                        st.markdown("<div class='menu-btn'>", unsafe_allow_html=True)
+                        track_stock = r.get('track_stock', True) and (cat not in VENDOR_CATS)
+                        is_disabled = track_stock and r.get('stock_level', 0) <= 0
+                        stock_label = f"\n({r['stock_level']} left)" if track_stock else ""
+                        label = f"{r['item_name']}\n₹{r['selling_price']:.0f}{stock_label}"
+                        if grid[i % 4].button(label, key=f"fnb_{r['id']}_{i}", disabled=is_disabled, use_container_width=True):
+                            st.session_state.fnb_cart.append({
+                                "id": r['id'], "name": r['item_name'], "price": r['selling_price'], 
+                                "cost": r['cost_price'], "track_stock": track_stock, "is_meal": "(W/O)" in r['item_name']
+                            })
+                            st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                
+                if cat == "Fries & Snacks":
+                    with st.expander("🍟 BYOB (Build Your Own Bag)"):
+                        chip_choice = st.selectbox("Base Chips", ["Blue Lays", "Kurkure", "Doritos", "Uncle Chipps"], key="t2_byob_chips")
+                        has_cheese = st.checkbox("Add Cheese (+₹30)", key="t2_byob_cheese")
+                        byob_p = 140 if has_cheese else 110; byob_c = 105 if has_cheese else 75
+                        if st.button(f"Add BYOB (₹{byob_p})", key="t2_byob_btn"):
+                            st.session_state.fnb_cart.append({"id": "byob", "name": f"BYOB ({chip_choice} {'w/ Cheese' if has_cheese else ''})", "price": byob_p, "cost": byob_c, "track_stock": False, "is_meal": False})
+                            st.rerun()
 
         with col_cart:
             st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
             st.subheader("🛒 Food Cart")
             if not st.session_state.fnb_cart: st.info("Cart is empty.")
             else:
-                tot_sell = sum([x['price'] for x in st.session_state.fnb_cart])
-                tot_cost = sum([x['cost'] for x in st.session_state.fnb_cart])
-                items_str = " | ".join([x['name'] for x in st.session_state.fnb_cart])
+                # Dynamic modifier choice for cold drinks
+                drink_options = ["None"]
+                drink_db_map = {}
+                if not inv_df.empty:
+                    drink_items = inv_df[inv_df['category'].isin(["Cold Drinks", "Beverages", "Mocktails"])]
+                    for d_row in drink_items.itertuples():
+                        lbl = f"{d_row.item_name} (Stock: {d_row.stock_level})"
+                        drink_options.append(lbl)
+                        drink_db_map[lbl] = {"id": d_row.id, "name": d_row.item_name, "cost": d_row.cost_price}
+
+                tot_sell = 0.0
+                tot_cost = 0.0
+                final_item_names = []
+                stock_deductions = {}
+
                 for i, item in enumerate(st.session_state.fnb_cart):
                     c_n, c_d = st.columns([4, 1])
-                    c_n.write(f"• {item['name']} (₹{item['price']:.0f})")
-                    if c_d.button("X", key=f"delf_{i}"): st.session_state.fnb_cart.pop(i); st.rerun()
+                    
+                    item_p = item['price']
+                    item_c = item['cost']
+                    display_name = item['name']
+                    
+                    if item.get('is_meal', False):
+                        sel_drink = c_n.selectbox(f"🥤 Drink for {item['name']}", drink_options, key=f"meal_drink_{i}")
+                        if sel_drink != "None":
+                            item_p += 25.0
+                            item_c += drink_db_map[sel_drink]['cost']
+                            display_name = f"{item['name']} [+ {drink_db_map[sel_drink]['name']}]"
+                            d_id = drink_db_map[sel_drink]['id']
+                            stock_deductions[d_id] = stock_deductions.get(d_id, 0) + 1
+                    else:
+                        c_n.write(f"• {item['name']} (₹{item['price']:.0f})")
+                        if item.get('track_stock', False):
+                            stock_deductions[item['id']] = stock_deductions.get(item['id'], 0) + 1
+
+                    tot_sell += item_p
+                    tot_cost += item_c
+                    final_item_names.append(display_name)
+
+                    if c_d.button("X", key=f"delf_{i}"): 
+                        st.session_state.fnb_cart.pop(i); st.rerun()
+
                 st.markdown(f"### Total: ₹{tot_sell:.0f}")
+                items_str = " | ".join(final_item_names)
                 
                 assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"], key="t2_assign")
-                gamer_id = None
-                final_fnb_pay = None
+                gamer_id = None; final_fnb_pay = None
                 
-                if assign == "Add to Active Gamer":
-                    if not active_gamers.empty:
-                        sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t2_gamer_sel")
-                        gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
-                    else: st.warning("No active gamers.")
+                if assign == "Add to Active Gamer" and not active_gamers.empty:
+                    sel_g = st.selectbox("Select Gamer", active_gamers['lbl'].tolist(), label_visibility="collapsed", key="t2_gamer_sel")
+                    gamer_id = int(active_gamers[active_gamers['lbl'] == sel_g].iloc[0]['id'])
+                elif assign == "Add to Active Gamer": st.warning("No active gamers.")
                 else:
                     direct_pay_method = st.radio("Walk-in Payment Method", ["Cash", "UPI", "Split Payment"], horizontal=True, key="t2_walkin_pay")
                     final_fnb_pay = direct_pay_method
@@ -475,12 +511,6 @@ with t2:
                         final_fnb_pay = f"Split|{walk_split_c}|{tot_sell - walk_split_c}"
                 
                 if st.button("✅ CONFIRM ORDER", use_container_width=True, key="t2_confirm_btn"):
-                    stock_deductions = {}
-                    for item in st.session_state.fnb_cart:
-                        if item.get('track_stock', False) and item['id'] != 'byob':
-                            i_id = item['id']
-                            stock_deductions[i_id] = stock_deductions.get(i_id, 0) + 1
-                            
                     for i_id, qty_sold in stock_deductions.items():
                         cur_stock = inv_df[inv_df['id'] == i_id].iloc[0]['stock_level']
                         conn.table("inventory").update({"stock_level": int(cur_stock - qty_sold)}).eq("id", i_id).execute()
@@ -493,8 +523,7 @@ with t2:
                     
                     if assign == "Add to Active Gamer" and gamer_id:
                         cur_tab = conn.table("sales").select("fnb_items, fnb_total").eq("id", gamer_id).execute().data[0]
-                        old_i = cur_tab.get('fnb_items') or ""
-                        old_t = float(cur_tab.get('fnb_total') or 0.0)
+                        old_i = cur_tab.get('fnb_items') or ""; old_t = float(cur_tab.get('fnb_total') or 0.0)
                         conn.table("sales").update({"fnb_items": f"{old_i} | {items_str}" if old_i else items_str, "fnb_total": float(old_t + tot_sell)}).eq("id", gamer_id).execute()
                     st.session_state.fnb_cart = []; st.cache_data.clear(); st.success("Order Processed!"); st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -537,13 +566,9 @@ with t2:
                     final_cat = n_cat_new.strip() if n_cat_sel == "➕ Create New Category" else n_cat_sel
                     if not n_name.strip(): st.error("⚠️ Please enter a name for the item.")
                     elif not final_cat: st.error("⚠️ Please select or enter a category.")
-                    elif not inv_df.empty and n_name.lower().strip() in inv_df['item_name'].str.lower().str.strip().values: st.error(f"⚠️ '{n_name}' already exists in your inventory!")
                     else:
-                        try:
-                            conn.table("inventory").insert({"item_name": n_name.strip(), "category": final_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
-                            st.cache_data.clear(); st.success(f"Successfully added {n_name}!")
-                            st.rerun()
-                        except Exception as e: st.error(f"Failed to add to database. Error: {e}")
+                        conn.table("inventory").insert({"item_name": n_name.strip(), "category": final_cat, "cost_price": float(n_cost), "selling_price": float(n_sell), "stock_level": int(n_qty)}).execute()
+                        st.cache_data.clear(); st.success(f"Successfully added {n_name}!"); st.rerun()
 
 # ==========================================
 # TAB 3: BOOKINGS, CART & QUEUE
@@ -568,8 +593,7 @@ with t3:
                 b_date = d_col.date_input("Select Date", value=datetime.now(IST).date(), min_value=datetime.now(IST).date(), key=f"t3_d_{st.session_state.form_reset}")
                 def_time = (datetime.now(IST) + timedelta(hours=1)).replace(minute=0, second=0).time()
                 b_time = t_col.time_input("Select Time", value=def_time, step=900, key=f"t3_bt2_{st.session_state.form_reset}")
-                sch_date = b_date.strftime('%Y-%m-%d')
-                time_str = b_time.strftime("%I:%M %p")
+                sch_date = b_date.strftime('%Y-%m-%d'); time_str = b_time.strftime("%I:%M %p")
                 final_status = "Booked"; btn_txt = f"📅 Confirm Reservation"
 
         st.subheader("2. Add Hardware")
@@ -609,8 +633,7 @@ with t3:
                                     db_s = datetime.strptime(f"{sch_date} {r['entry_time']}", "%Y-%m-%d %I:%M %p")
                                     db_e = db_s + timedelta(hours=r['duration'])
                                     if new_s < db_e and new_e > db_s:
-                                        conflict = True; st.error(f"⚠️ Conflict on {item['system']} from {r['entry_time']} for {r['duration']}h.")
-                                        break
+                                        conflict = True; st.error(f"⚠️ Conflict on {item['system']} from {r['entry_time']} for {r['duration']}h."); break
                             if conflict: break
                     if not conflict:
                         for item in st.session_state.cart:
@@ -618,32 +641,6 @@ with t3:
                         st.session_state.cart = []; st.session_state.form_reset += 1; st.cache_data.clear(); st.success("Success!"); st.rerun()
         else: st.info("Cart is empty.")
         st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.write("### 📅 Upcoming Bookings Queue")
-        if not db_df.empty:
-            up_df = db_df[db_df['status'] == 'Booked']
-            if not up_df.empty:
-                st.dataframe(up_df[['scheduled_date', 'entry_time', 'customer', 'system', 'duration']], hide_index=True, use_container_width=True)
-                
-                up_df['lbl'] = up_df['customer'] + " | " + up_df['system']
-                c_chk, c_can = st.columns(2)
-                
-                with c_chk:
-                    st.write("✅ **Check-In Gamer**")
-                    sel_chk = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="t3_chk_sel", label_visibility="collapsed")
-                    if st.button("🚀 Start Session", use_container_width=True, key="t3_start_btn"):
-                        t_id = up_df[up_df['lbl'] == sel_chk].iloc[0]['id']
-                        now_time = datetime.now(IST).strftime("%I:%M %p")
-                        conn.table("sales").update({"status": "Active", "entry_time": now_time}).eq("id", int(t_id)).execute()
-                        st.cache_data.clear(); st.success("Checked in successfully!"); st.rerun()
-                
-                with c_can:
-                    st.write("🚫 **Cancel Booking**")
-                    sel_can = st.selectbox("Select Gamer", up_df['lbl'].tolist(), key="t3_can_sel", label_visibility="collapsed")
-                    if st.button("Cancel Booking", type="primary", use_container_width=True, key="t3_can_btn"):
-                        t_id = up_df[up_df['lbl'] == sel_can].iloc[0]['id']
-                        conn.table("sales").update({"status": "Cancelled"}).eq("id", int(t_id)).execute()
-                        st.cache_data.clear(); st.warning("Booking Cancelled!"); st.rerun()
 
 # ==========================================
 # TAB 4: MASTER VAULT (OWNER VIEW)
@@ -652,44 +649,25 @@ with t4:
     st.subheader("🔐 Master Intelligence Vault")
     if st.text_input("Master Key", type="password", key="t5_pwd") == "Su22101992@":
         try:
-            with st.expander("💸 Record Cafe Expenses", expanded=False):
-                with st.form("expense_form"):
-                    e_desc, e_amt, e_meth = st.columns(3)
-                    desc = e_desc.text_input("Expense Details", key="t5_e_desc")
-                    amt = e_amt.number_input("Amount (₹)", 0, key="t5_e_amt")
-                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
-                    if st.form_submit_button("Log Expense", use_container_width=True):
-                        conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
-                        st.cache_data.clear(); st.success("Logged!"); st.rerun()
-
-            st.divider()
-            
-            # Fetch All Data
             raw_v = conn.table("sales").select("*").order('id', desc=True).limit(50000).execute()
-            vdf = pd.DataFrame(raw_v.data)
-            
+            vdf = pd.DataFrame(raw_v.data) if raw_v.data else pd.DataFrame()
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
-            cafe_all_df = pd.DataFrame(cafe_res.data)
+            cafe_all_df = pd.DataFrame(cafe_res.data) if cafe_res.data else pd.DataFrame()
 
-            # --- SELECT REPORT DATE ---
-            st.write("### 📅 Daily Performance Report")
-            report_date = st.date_input("Select Date for Summary", value=datetime.now(IST).date(), key="t4_rep_date")
+            st.write("### 📅 Daily Performance Picker Ledger")
+            report_date = st.date_input("Select Target Report Date Summary", value=datetime.now(IST).date(), key="t4_rep_date")
             rep_date_str = report_date.strftime('%Y-%m-%d')
             
-            # --- Compute Target Day's Data ---
             if not cafe_all_df.empty:
-                cafe_target_day = cafe_all_df[cafe_all_df['date'].str.startswith(rep_date_str)].copy()
-                if not cafe_target_day.empty:
-                    cafe_target_day['total_revenue'] = pd.to_numeric(cafe_target_day['total_revenue'], errors='coerce').fillna(0.0)
-                    cafe_target_day['profit'] = pd.to_numeric(cafe_target_day['profit'], errors='coerce').fillna(0.0)
-                    gross_fnb_sale = cafe_target_day['total_revenue'].sum()
-                    gross_fnb_profit = cafe_target_day['profit'].sum()
-                    direct_fnb_df = cafe_target_day[cafe_target_day['method'] != 'Tab']
+                cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(rep_date_str)].copy()
+                if not cafe_today.empty:
+                    cafe_today['total_revenue'] = pd.to_numeric(cafe_today['total_revenue'], errors='coerce').fillna(0.0)
+                    cafe_today['profit'] = pd.to_numeric(cafe_today['profit'], errors='coerce').fillna(0.0)
+                    gross_fnb_sale = cafe_today['total_revenue'].sum(); gross_fnb_profit = cafe_today['profit'].sum()
+                    direct_fnb_df = cafe_today[cafe_today['method'] != 'Tab']
                     direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
-                else:
-                    gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
-            else:
-                gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+                else: gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+            else: gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
 
             if not vdf.empty:
                 vdf['date_str'] = vdf['date'].str[:10]
@@ -704,36 +682,23 @@ with t4:
                 
                 hw_map_wa = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"SIM"}
                 today_comp['Category'] = today_comp['system'].map(hw_map_wa).fillna(today_comp['system'])
-                today_hw_group = today_comp.groupby('Category')['pure_game'].sum()
-                ps_wa = today_hw_group.get('PS5', 0.0)
-                pc_wa = today_hw_group.get('PC', 0.0)
-                sim_wa = today_hw_group.get('SIM', 0.0)
+                today_hw_group = today_comp.groupby('Category')['pure_game'].sum() if not today_comp.empty else {}
+                ps_wa = today_hw_group.get('PS5', 0.0); pc_wa = today_hw_group.get('PC', 0.0); sim_wa = today_hw_group.get('SIM', 0.0)
             else:
-                comp_df = pd.DataFrame()
-                checkout_cash = checkout_upi = pure_game_rev = 0.0
+                comp_df = pd.DataFrame(); checkout_cash = checkout_upi = pure_game_rev = 0.0
                 ps_wa = pc_wa = sim_wa = 0.0
 
             total_drawer_cash = checkout_cash + direct_fnb_cash
             total_bank_upi = checkout_upi + direct_fnb_upi
             total_revenue = pure_game_rev + gross_fnb_profit
             
-            st.write(f"### 📊 {report_date.strftime('%b %d')} Overview Summary")
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Net Revenue (Game + F&B Profit)<h2 style='color:#00D0FF'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='metric-box'>Total UPI (Bank)<h2 style='color:white'>₹{total_bank_upi:,.0f}</h2></div>", unsafe_allow_html=True)
             
-            st.write(f"### 🎮 {report_date.strftime('%b %d')} Gaming Breakdown")
-            st.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Pure Gaming Sale (Hardware Time Only)<h2 style='color:#00D0FF'>₹{pure_game_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-            
-            st.write(f"### 🍔 {report_date.strftime('%b %d')} F&B Breakdown")
-            f1, f2 = st.columns(2)
-            f1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Total F&B Sale<h2 style='color:#00D0FF'>₹{gross_fnb_sale:,.0f}</h2></div>", unsafe_allow_html=True)
-            f2.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>F&B Profit (Yours)<h2 style='color:#00D0FF'>₹{gross_fnb_profit:,.0f}</h2></div>", unsafe_allow_html=True)
-            
             st.write("### 📱 One-Click WhatsApp Report")
             date_str_wa = f"{get_ordinal(report_date.day)} {report_date.strftime('%B')}"
-            
             whatsapp_msg = f"""*Today's income - {date_str_wa}*
 
 a. Cash - {total_drawer_cash:,.0f}
@@ -747,93 +712,41 @@ Breakup:
 PS5- {ps_wa:,.0f}
 PC- {pc_wa:,.0f}
 SIM- {sim_wa:,.0f}"""
-
             st.code(whatsapp_msg, language='markdown')
             
             st.divider()
-
-            st.write(f"### 📝 Detailed Session Log for {report_date.strftime('%b %d')}")
-            if not vdf.empty:
-                today_all = vdf[vdf['date'].str.startswith(rep_date_str)].copy()
-                if not today_all.empty:
-                    st.dataframe(today_all[['id', 'customer', 'system', 'duration', 'entry_time', 'method', 'total', 'fnb_total', 'status']], hide_index=True, use_container_width=True)
-                    
-                    with st.expander(f"✏️ Quick Edit a Session on {report_date.strftime('%b %d')} (Syncs to Supabase)"):
-                        edit_id = st.selectbox("Select Session ID to Edit", today_all['id'].tolist(), key="t5_edit_sel")
-                        if edit_id:
-                            row_to_edit = today_all[today_all['id'] == edit_id].iloc[0]
-                            with st.form("edit_session_form"):
-                                e_col1, e_col2, e_col3 = st.columns(3)
-                                current_meth = str(row_to_edit['method'])
-                                meth_options = ["Cash", "UPI", "Split Payment", "Master Tab", "Pending"]
-                                if current_meth not in meth_options and current_meth.startswith("Split|"):
-                                    meth_options.append(current_meth)
-                                    
-                                n_meth = e_col1.selectbox("Payment Method", meth_options, index=meth_options.index(current_meth) if current_meth in meth_options else 0)
-                                n_tot = e_col2.number_input("Game Total (₹)", value=float(row_to_edit['total']))
-                                n_fnb = e_col3.number_input("F&B Total (₹)", value=float(row_to_edit['fnb_total']))
-                                
-                                if st.form_submit_button("Update Session in Database"):
-                                    conn.table("sales").update({"method": n_meth, "total": float(n_tot), "fnb_total": float(n_fnb)}).eq("id", int(edit_id)).execute()
-                                    st.cache_data.clear()
-                                    st.success(f"Session {edit_id} updated successfully!")
-                                    st.rerun()
-                else:
-                    st.info(f"No sessions recorded on {report_date.strftime('%b %d')}.")
-            else:
-                st.info("No sessions recorded yet.")
-
-            st.divider()
-
-            # --- THE EXECUTIVE P&L MATRIX ---
-            st.write("### 📈 Executive Revenue Dashboard")
-            
+            # --- THE EXECUTIVE P&L MATRIX ROW DEFINITIONS ---
+            st.write("### 📈 Executive Revenue Dashboard Matrix Intelligence")
             if not comp_df.empty:
-                # 1. Prepare Game Data
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
-                
-                # 2. Prepare F&B Data
                 if not cafe_all_df.empty:
                     cafe_all_df['date_str'] = cafe_all_df['date'].str[:10]
                     cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df['total_revenue'], errors='coerce').fillna(0.0)
                     cafe_all_df['profit'] = pd.to_numeric(cafe_all_df['profit'], errors='coerce').fillna(0.0)
                     daily_fnb = cafe_all_df.groupby('date_str').agg({'total_revenue': 'sum', 'profit': 'sum'}).reset_index()
-                else:
-                    daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
+                else: daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
 
-                # 3. Prepare Expenses
                 exp_raw = conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute()
-                exp_df = pd.DataFrame(exp_raw.data)
+                exp_df = pd.DataFrame(exp_raw.data) if exp_raw.data else pd.DataFrame()
                 if not exp_df.empty:
                     exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
                     exp_summary = exp_df.groupby('expense_date')['amount'].sum().reset_index()
                     exp_summary.rename(columns={'expense_date': 'date_str', 'amount': 'daily_expenses'}, inplace=True)
-                else:
-                    exp_summary = pd.DataFrame(columns=['date_str', 'daily_expenses'])
+                else: exp_summary = pd.DataFrame(columns=['date_str', 'daily_expenses'])
 
-                # 4. Merge Everything safely on strings
                 master_ledger = pd.merge(daily_game, daily_fnb, on='date_str', how='outer').fillna(0.0)
                 master_ledger = pd.merge(master_ledger, exp_summary, on='date_str', how='outer').fillna(0.0)
 
-                # 5. Math Calculations
                 master_ledger['Gross Revenue'] = master_ledger['pure_game'] + master_ledger['total_revenue']
                 master_ledger['Net Revenue'] = master_ledger['pure_game'] + master_ledger['profit']
                 master_ledger['Net Profit'] = master_ledger['Net Revenue'] - master_ledger['daily_expenses']
-
-                # 6. Parse dates for filtering
                 master_ledger['date_obj'] = pd.to_datetime(master_ledger['date_str'])
 
                 now_d = datetime.now(IST).date()
-                start_tw = now_d - timedelta(days=now_d.weekday())
-                start_lw = start_tw - timedelta(days=7)
-                end_lw = start_tw - timedelta(days=1)
-                
-                start_tm = now_d.replace(day=1)
-                end_lm = start_tm - timedelta(days=1)
-                start_lm = end_lm.replace(day=1)
+                start_tw = now_d - timedelta(days=now_d.weekday()); start_lw = start_tw - timedelta(days=7); end_lw = start_tw - timedelta(days=1)
+                start_tm = now_d.replace(day=1); end_lm = start_tm - timedelta(days=1); start_lm = end_lm.replace(day=1)
 
-                def get_sum(df, col, mask):
-                    return df.loc[mask, col].sum() if not df.empty else 0.0
+                def get_sum(df, col, mask): return df.loc[mask, col].sum() if not df.empty else 0.0
 
                 mask_life = master_ledger['date_obj'].notna()
                 mask_mtd = master_ledger['date_obj'].dt.date >= start_tm
@@ -841,21 +754,12 @@ SIM- {sim_wa:,.0f}"""
                 mask_wtd = master_ledger['date_obj'].dt.date >= start_tw
                 mask_lw = (master_ledger['date_obj'].dt.date >= start_lw) & (master_ledger['date_obj'].dt.date <= end_lw)
 
-                # Gross Metrics
-                g_life = get_sum(master_ledger, 'Gross Revenue', mask_life)
-                g_mtd = get_sum(master_ledger, 'Gross Revenue', mask_mtd)
-                g_lm = get_sum(master_ledger, 'Gross Revenue', mask_lm)
-                g_wtd = get_sum(master_ledger, 'Gross Revenue', mask_wtd)
-                g_lw = get_sum(master_ledger, 'Gross Revenue', mask_lw)
+                g_life = get_sum(master_ledger, 'Gross Revenue', mask_life); g_mtd = get_sum(master_ledger, 'Gross Revenue', mask_mtd)
+                g_lm = get_sum(master_ledger, 'Gross Revenue', mask_lm); g_wtd = get_sum(master_ledger, 'Gross Revenue', mask_wtd); g_lw = get_sum(master_ledger, 'Gross Revenue', mask_lw)
 
-                # Net Profit Metrics
-                p_life = get_sum(master_ledger, 'Net Profit', mask_life)
-                p_mtd = get_sum(master_ledger, 'Net Profit', mask_mtd)
-                p_lm = get_sum(master_ledger, 'Net Profit', mask_lm)
-                p_wtd = get_sum(master_ledger, 'Net Profit', mask_wtd)
-                p_lw = get_sum(master_ledger, 'Net Profit', mask_lw)
+                p_life = get_sum(master_ledger, 'Net Profit', mask_life); p_mtd = get_sum(master_ledger, 'Net Profit', mask_mtd)
+                p_lm = get_sum(master_ledger, 'Net Profit', mask_lm); p_wtd = get_sum(master_ledger, 'Net Profit', mask_wtd); p_lw = get_sum(master_ledger, 'Net Profit', mask_lw)
 
-                # ROW 1: GROSS REVENUE
                 st.write("##### 💵 Gross Revenue (Topline Income)")
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Lifetime Gross", f"₹{g_life:,.0f}")
@@ -864,7 +768,6 @@ SIM- {sim_wa:,.0f}"""
                 c4.metric("This Week (WTD)", f"₹{g_wtd:,.0f}", delta=f"{((g_wtd-g_lw)/g_lw*100) if g_lw else 0:.1f}% vs Last Week")
                 c5.metric("Last Week", f"₹{g_lw:,.0f}")
 
-                # ROW 2: NET PROFIT
                 st.write("##### 💰 Net Profit (Pure Game + F&B Profit - Expenses)")
                 p1, p2, p3, p4, p5 = st.columns(5)
                 p1.metric("Lifetime Profit", f"₹{p_life:,.0f}")
@@ -872,65 +775,11 @@ SIM- {sim_wa:,.0f}"""
                 p3.metric("Last Month", f"₹{p_lm:,.0f}")
                 p4.metric("This Week (WTD)", f"₹{p_wtd:,.0f}", delta=f"{((p_wtd-p_lw)/abs(p_lw)*100) if p_lw else 0:.1f}% vs Last Week")
                 p5.metric("Last Week", f"₹{p_lw:,.0f}")
-                
-                st.divider()
-                
-                st.write("### 🎮 Lifetime Hardware Breakdown (Pure Gaming)")
-                hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
-                comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
-                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
-                
-                hw_life = comp_df.groupby('Category')['pure_game'].sum().rename('Lifetime Gross')
-                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['pure_game'].sum().rename('This Month')
-                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['pure_game'].sum().rename('Last Month')
-                
-                hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
-                st.dataframe(hw_summary, hide_index=True, use_container_width=True)
 
             st.divider()
-
+            st.write("### 📝 Detailed Session Log Lookup")
             if not vdf.empty:
-                st.subheader("📅 Day-Wise Profit & Loss Ledger")
-                master_ledger_disp = master_ledger[['date_str', 'Gross Revenue', 'Net Revenue', 'daily_expenses', 'Net Profit']].copy()
-                master_ledger_disp.columns = ['Date', 'Gross Sales', 'Net Revenue', 'Expenses', 'Net Profit']
-                master_ledger_disp = master_ledger_disp.sort_values('Date', ascending=False)
-                
-                st.dataframe(master_ledger_disp, hide_index=True, use_container_width=True)
-
-            st.divider()
-            st.write("### 📅 Custom Hardware Breakdown")
-            d_range_hw = st.date_input("Select Date or Range to analyze hardware performance", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_hw_range")
-            if len(d_range_hw) == 2:
-                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range_hw]
-                if not vdf.empty:
-                    hw_filter = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt) & (vdf['status'] == 'Completed')].copy()
-                    if not hw_filter.empty:
-                        hw_filter['total'] = pd.to_numeric(hw_filter['total'], errors='coerce').fillna(0.0)
-                        hw_filter['fnb_total'] = pd.to_numeric(hw_filter['fnb_total'], errors='coerce').fillna(0.0)
-                        hw_filter['pure_game'] = hw_filter['total'] - hw_filter['fnb_total']
-                        
-                        hw_map = {"PS1":"PlayStation", "PS2":"PlayStation", "PS3":"PlayStation", 
-                                  "PC1":"PC", "PC2":"PC", "SIM1":"Simulator"}
-                        hw_filter['Category'] = hw_filter['system'].map(hw_map).fillna(hw_filter['system'])
-                        
-                        hw_group = hw_filter.groupby('Category')['pure_game'].sum()
-                        ps_rev = hw_group.get('PlayStation', 0.0)
-                        pc_rev = hw_group.get('PC', 0.0)
-                        sim_rev = hw_group.get('Simulator', 0.0)
-                        
-                        h1, h2, h3 = st.columns(3)
-                        h1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>PlayStation (PS1-PS3)<h2 style='color:#00D0FF'>₹{ps_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                        h2.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>PC (PC1-PC2)<h2 style='color:#00D0FF'>₹{pc_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                        h3.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Simulator (SIM1)<h2 style='color:#00D0FF'>₹{sim_rev:,.0f}</h2></div>", unsafe_allow_html=True)
-                    else:
-                        st.info("No completed gaming sessions found in this date range.")
-            st.divider()
-            st.write("### Export Data")
-            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_drange")
-            if len(d_range) == 2:
-                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
-                f_edf = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt)] if not vdf.empty else pd.DataFrame()
-                if not f_edf.empty:
-                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t5_export_btn")
-
-        except Exception as e: st.error(f"Vault processing error: {e}")
+                today_all = vdf[vdf['date'].str.startswith(rep_date_str)].copy()
+                if not today_all.empty:
+                    st.dataframe(today_all[['id', 'customer', 'system', 'duration', 'entry_time', 'method', 'total', 'fnb_total', 'status']], hide_index=True, use_container_width=True)
+        except Exception as e: st.error(f"Vault calculation handling anomaly: {e}")
