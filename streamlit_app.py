@@ -4,7 +4,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
 
 # --- 1. CONFIG & UI THEME ---
 st.set_page_config(page_title="Gamerarena Master ERP", page_icon="🎮", layout="wide")
@@ -165,7 +164,7 @@ try:
     inv_res = conn.table("inventory").select("*").order('item_name').limit(10000).execute()
     raw_inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
     
-    # Apply dynamic catalog overrides for French Fries parameters safely
+    # Dynamic catalog overrides for accurate French Fries pricing parameters
     inv_df = raw_inv_df.copy()
     if not inv_df.empty:
         for idx, r in inv_df.iterrows():
@@ -198,7 +197,7 @@ except Exception as e:
     db_df = pd.DataFrame(columns=db_cols)
     tab_df = pd.DataFrame(columns=db_cols)
 
-# Define 4 brand new combo structural models explicitly
+# Hardcoded modeling definitions for Without-Drink (W/O) Special Combo Meals
 SPECIAL_MEALS = [
     {"id": "spec_tt", "item_name": "Tikki Tango Meal (W/O)", "selling_price": 175.0, "cost_price": 129.0, "category": "Burgers & Meals", "track_stock": False},
     {"id": "spec_pp", "item_name": "Peri Peri Mini Meal (W/O)", "selling_price": 205.0, "cost_price": 149.0, "category": "Burgers & Meals", "track_stock": False},
@@ -213,7 +212,7 @@ t1, t2, t3, t4 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Booki
 # TAB 1: LIVE FLOOR & CHECKOUT
 # ==========================================
 with t1:
-    # --- PENDING ON FLOOR METRIC AT THE TOP ---
+    # --- PENDING ON FLOOR METRIC ---
     pending_floor = 0.0
     if not db_df.empty:
         pending_floor = pd.to_numeric(db_df[db_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
@@ -308,9 +307,9 @@ with t1:
                 calc_total = dyn_game_bill + food_bill + past_tab_amt
                 
                 if past_tab_amt > 0:
-                    st.markdown(f"<div style='color:#9CA3AF; font-size:12px;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></div>", unsafe_allow_html=True)
+                    st.markdown(f"<small style='color:#9CA3AF;'>Current Game: ₹{dyn_game_bill:.0f} | F&B: ₹{food_bill:.0f} | <span style='color:#FF754C'>Past Unpaid Tab: ₹{past_tab_amt:.0f}</span></small>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<div style='color:#9CA3AF; font-size:12px;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<small style='color:#9CA3AF;'>Expected Gaming: ₹{dyn_game_bill:.0f} | F&B Tab: ₹{food_bill:.0f}</small>", unsafe_allow_html=True)
 
                 final_total = st.number_input("Final Checkout Amount (₹)", min_value=0.0, value=float(calc_total), step=1.0, key=f"t1_final_tot_{db_state_key}_{f_dur}_{calc_total}")
                 
@@ -328,17 +327,14 @@ with t1:
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{db_state_key}"):
                     current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
                     
-                    # Pro-rate split payment across past entries to stop total cash duplicate calculations
+                    # Pro-rate split fractions to prevent financial cash ledger calculation loops
                     if final_method_str.startswith("Split|") and not past_tabs.empty:
                         pts = final_method_str.split('|')
-                        t_cash_p = float(pts[1])
-                        t_upi_p = float(pts[2])
+                        t_cash_p = float(pts[1]); t_upi_p = float(pts[2])
                         denom = final_total if final_total > 0 else 1.0
-                        
                         for past_row in past_tabs.itertuples():
                             frac = float(past_row.total) / denom
                             conn.table("sales").update({"method": f"Split|{t_cash_p*frac:.2f}|{t_upi_p*frac:.2f}"}).eq("id", int(past_row.id)).execute()
-                            
                         frac_curr = current_row_final / denom
                         final_method_str = f"Split|{t_cash_p*frac_curr:.2f}|{t_upi_p*frac_curr:.2f}"
                     elif final_method_str != "Master Tab" and not past_tabs.empty:
@@ -380,11 +376,9 @@ with t1:
                 final_settle_meth = f"Split|{settle_split_cash}|{total_owed - settle_split_cash}"
                 
             if st.button("✅ Settle Tab", use_container_width=True, key=f"t1_settle_btn_{sel_unpaid_cust}"):
-                # Pro-rate split payment fractions accurately to prevent cash inflation
                 if final_settle_meth.startswith("Split|"):
                     pts = final_settle_meth.split('|')
-                    t_cash_p = float(pts[1])
-                    t_upi_p = float(pts[2])
+                    t_cash_p = float(pts[1]); t_upi_p = float(pts[2])
                     denom = total_owed if total_owed > 0 else 1.0
                     for past_row in cust_tabs.itertuples():
                         frac = float(past_row.total) / denom
@@ -405,7 +399,6 @@ with t2:
     with pos_tab:
         col_menu, col_cart = st.columns([2.5, 1], gap="large")
         with col_menu:
-            # Render special customized meals inside Burgers & Meals
             all_rendered_cats = ["Burgers & Meals", "Fries & Snacks"]
             if not inv_df.empty:
                 existing_db_cats = inv_df['category'].dropna().unique().tolist()
@@ -450,7 +443,6 @@ with t2:
             st.subheader("🛒 Food Cart")
             if not st.session_state.fnb_cart: st.info("Cart is empty.")
             else:
-                # Dynamic modifier choice for cold drinks
                 drink_options = ["None"]
                 drink_db_map = {}
                 if not inv_df.empty:
@@ -460,23 +452,16 @@ with t2:
                         drink_options.append(lbl)
                         drink_db_map[lbl] = {"id": d_row.id, "name": d_row.item_name, "cost": d_row.cost_price}
 
-                tot_sell = 0.0
-                tot_cost = 0.0
-                final_item_names = []
-                stock_deductions = {}
+                tot_sell = 0.0; tot_cost = 0.0; final_item_names = []; stock_deductions = {}
 
                 for i, item in enumerate(st.session_state.fnb_cart):
                     c_n, c_d = st.columns([4, 1])
-                    
-                    item_p = item['price']
-                    item_c = item['cost']
-                    display_name = item['name']
+                    item_p = item['price']; item_c = item['cost']; display_name = item['name']
                     
                     if item.get('is_meal', False):
                         sel_drink = c_n.selectbox(f"🥤 Drink for {item['name']}", drink_options, key=f"meal_drink_{i}")
                         if sel_drink != "None":
-                            item_p += 25.0
-                            item_c += drink_db_map[sel_drink]['cost']
+                            item_p += 25.0; item_c += drink_db_map[sel_drink]['cost']
                             display_name = f"{item['name']} [+ {drink_db_map[sel_drink]['name']}]"
                             d_id = drink_db_map[sel_drink]['id']
                             stock_deductions[d_id] = stock_deductions.get(d_id, 0) + 1
@@ -485,16 +470,11 @@ with t2:
                         if item.get('track_stock', False):
                             stock_deductions[item['id']] = stock_deductions.get(item['id'], 0) + 1
 
-                    tot_sell += item_p
-                    tot_cost += item_c
-                    final_item_names.append(display_name)
-
-                    if c_d.button("X", key=f"delf_{i}"): 
-                        st.session_state.fnb_cart.pop(i); st.rerun()
+                    tot_sell += item_p; tot_cost += item_c; final_item_names.append(display_name)
+                    if c_d.button("X", key=f"delf_{i}"): st.session_state.fnb_cart.pop(i); st.rerun()
 
                 st.markdown(f"### Total: ₹{tot_sell:.0f}")
                 items_str = " | ".join(final_item_names)
-                
                 assign = st.radio("Bill To:", ["Add to Active Gamer", "Walk-in (Pay Now)"], key="t2_assign")
                 gamer_id = None; final_fnb_pay = None
                 
@@ -649,15 +629,28 @@ with t4:
     st.subheader("🔐 Master Intelligence Vault")
     if st.text_input("Master Key", type="password", key="t5_pwd") == "Su22101992@":
         try:
+            with st.expander("💸 Record Cafe Expenses", expanded=False):
+                with st.form("expense_form"):
+                    e_desc, e_amt, e_meth = st.columns(3)
+                    desc = e_desc.text_input("Expense Details", key="t5_e_desc")
+                    amt = e_amt.number_input("Amount (₹)", 0, key="t5_e_amt")
+                    meth = e_meth.selectbox("Paid Via", ["Cash", "UPI"], key="t5_e_meth")
+                    if st.form_submit_button("Log Expense", use_container_width=True):
+                        conn.table("expenses").insert({"expense_date": datetime.now(IST).strftime('%Y-%m-%d'), "category": desc, "amount": amt, "method": meth}).execute()
+                        st.cache_data.clear(); st.success("Logged!"); st.rerun()
+
+            st.divider()
             raw_v = conn.table("sales").select("*").order('id', desc=True).limit(50000).execute()
-            vdf = pd.DataFrame(raw_v.data) if raw_v.data else pd.DataFrame()
+            vdf = pd.DataFrame(raw_v.data) if raw_v.data else pd.DataFrame(columns=db_cols)
             cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
             cafe_all_df = pd.DataFrame(cafe_res.data) if cafe_res.data else pd.DataFrame()
 
-            st.write("### 📅 Daily Performance Picker Ledger")
-            report_date = st.date_input("Select Target Report Date Summary", value=datetime.now(IST).date(), key="t4_rep_date")
+            # --- SELECT REPORT DATE ---
+            st.write("### 📅 Daily Performance Report")
+            report_date = st.date_input("Select Date for Summary", value=datetime.now(IST).date(), key="t4_rep_date")
             rep_date_str = report_date.strftime('%Y-%m-%d')
             
+            # --- Compute Target Day's Data ---
             if not cafe_all_df.empty:
                 cafe_today = cafe_all_df[cafe_all_df['date'].str.startswith(rep_date_str)].copy()
                 if not cafe_today.empty:
@@ -692,6 +685,7 @@ with t4:
             total_bank_upi = checkout_upi + direct_fnb_upi
             total_revenue = pure_game_rev + gross_fnb_profit
             
+            st.write(f"### 📊 {report_date.strftime('%b %d')} Overview Summary")
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='metric-box' style='border-color:#00D0FF'>Net Revenue (Game + F&B Profit)<h2 style='color:#00D0FF'>₹{total_revenue:,.0f}</h2></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='metric-box'>Total Cash (Drawer)<h2 style='color:white'>₹{total_drawer_cash:,.0f}</h2></div>", unsafe_allow_html=True)
@@ -715,8 +709,9 @@ SIM- {sim_wa:,.0f}"""
             st.code(whatsapp_msg, language='markdown')
             
             st.divider()
-            # --- THE EXECUTIVE P&L MATRIX ROW DEFINITIONS ---
-            st.write("### 📈 Executive Revenue Dashboard Matrix Intelligence")
+            
+            # --- OVERHAULED FINANCIAL INTELLIGENCE MATRIX ---
+            st.write("### 📈 Executive Revenue Dashboard")
             if not comp_df.empty:
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 if not cafe_all_df.empty:
@@ -760,6 +755,7 @@ SIM- {sim_wa:,.0f}"""
                 p_life = get_sum(master_ledger, 'Net Profit', mask_life); p_mtd = get_sum(master_ledger, 'Net Profit', mask_mtd)
                 p_lm = get_sum(master_ledger, 'Net Profit', mask_lm); p_wtd = get_sum(master_ledger, 'Net Profit', mask_wtd); p_lw = get_sum(master_ledger, 'Net Profit', mask_lw)
 
+                # ROW 1: GROSS INCOME BREAKDOWNS
                 st.write("##### 💵 Gross Revenue (Topline Income)")
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Lifetime Gross", f"₹{g_life:,.0f}")
@@ -768,6 +764,7 @@ SIM- {sim_wa:,.0f}"""
                 c4.metric("This Week (WTD)", f"₹{g_wtd:,.0f}", delta=f"{((g_wtd-g_lw)/g_lw*100) if g_lw else 0:.1f}% vs Last Week")
                 c5.metric("Last Week", f"₹{g_lw:,.0f}")
 
+                # ROW 2: NET FINANCIAL ACTUAL BOTTOM LINE PROFITS
                 st.write("##### 💰 Net Profit (Pure Game + F&B Profit - Expenses)")
                 p1, p2, p3, p4, p5 = st.columns(5)
                 p1.metric("Lifetime Profit", f"₹{p_life:,.0f}")
@@ -776,10 +773,57 @@ SIM- {sim_wa:,.0f}"""
                 p4.metric("This Week (WTD)", f"₹{p_wtd:,.0f}", delta=f"{((p_wtd-p_lw)/abs(p_lw)*100) if p_lw else 0:.1f}% vs Last Week")
                 p5.metric("Last Week", f"₹{p_lw:,.0f}")
 
+                st.write("##### 📊 Detailed Revenue & Profit Breakdown Matrix")
+                periods = [
+                    ("Lifetime", mask_life),
+                    ("This Month (MTD)", mask_mtd),
+                    ("Last Month", mask_lm),
+                    ("This Week (WTD)", mask_wtd),
+                    ("Last Week", mask_lw)
+                ]
+                row_gross = {"Metric": "Gross Revenue"}; row_game = {"Metric": "🎮 Pure Gaming Sales"}
+                row_fnb_s = {"Metric": "🍔 F&B Sales"}; row_fnb_p = {"Metric": "📈 F&B Profits (Yours)"}
+                row_exp = {"Metric": "💸 Total Expenses"}; row_net = {"Metric": "💰 Net Profit"}
+
+                for p_name, p_mask in periods:
+                    sub_ledger = master_ledger[p_mask]
+                    row_gross[p_name] = f"₹{sub_ledger['Gross Revenue'].sum():,.0f}"
+                    row_game[p_name] = f"₹{sub_ledger['pure_game'].sum():,.0f}"
+                    row_fnb_s[p_name] = f"₹{sub_ledger['total_revenue'].sum():,.0f}"
+                    row_fnb_p[p_name] = f"₹{sub_ledger['profit'].sum():,.0f}"
+                    row_exp[p_name] = f"₹{sub_ledger['daily_expenses'].sum():,.0f}"
+                    row_net[p_name] = f"₹{sub_ledger['Net Profit'].sum():,.0f}"
+
+                exec_df = pd.DataFrame([row_gross, row_game, row_fnb_s, row_fnb_p, row_exp, row_net])
+                st.dataframe(exec_df, hide_index=True, use_container_width=True)
+
+                st.divider()
+                st.write("### 🎮 Lifetime Hardware Breakdown (Pure Gaming)")
+                hw_map = {"PC1":"PC", "PC2":"PC", "PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "SIM1":"Racing Sim"}
+                comp_df['Category'] = comp_df['system'].map(hw_map).fillna(comp_df['system'])
+                comp_df['date_obj'] = pd.to_datetime(comp_df['date_str'])
+                
+                hw_life = comp_df.groupby('Category')['pure_game'].sum().rename('Lifetime Gross')
+                hw_tm = comp_df[comp_df['date_obj'].dt.date >= start_tm].groupby('Category')['pure_game'].sum().rename('This Month')
+                hw_lm = comp_df[(comp_df['date_obj'].dt.date >= start_lm) & (comp_df['date_obj'].dt.date <= end_lm)].groupby('Category')['pure_game'].sum().rename('Last Month')
+                hw_summary = pd.concat([hw_life, hw_tm, hw_lm], axis=1).fillna(0).reset_index()
+                st.dataframe(hw_summary, hide_index=True, use_container_width=True)
+
             st.divider()
-            st.write("### 📝 Detailed Session Log Lookup")
             if not vdf.empty:
-                today_all = vdf[vdf['date'].str.startswith(rep_date_str)].copy()
-                if not today_all.empty:
-                    st.dataframe(today_all[['id', 'customer', 'system', 'duration', 'entry_time', 'method', 'total', 'fnb_total', 'status']], hide_index=True, use_container_width=True)
-        except Exception as e: st.error(f"Vault calculation handling anomaly: {e}")
+                st.subheader("📅 Day-Wise Profit & Loss Ledger")
+                master_ledger_disp = master_ledger[['date_str', 'Gross Revenue', 'Net Revenue', 'daily_expenses', 'Net Profit']].copy()
+                master_ledger_disp.columns = ['Date', 'Gross Sales', 'Net Revenue', 'Expenses', 'Net Profit']
+                master_ledger_disp = master_ledger_disp.sort_values('Date', ascending=False)
+                st.dataframe(master_ledger_disp, hide_index=True, use_container_width=True)
+
+            st.divider()
+            st.write("### Export Data")
+            d_range = st.date_input("Select Date Range to Export", [datetime.now(IST).date(), datetime.now(IST).date()], key="t5_drange")
+            if len(d_range) == 2:
+                s_dt, e_dt = [d.strftime('%Y-%m-%d') for d in d_range]
+                f_edf = vdf[(vdf['date_str'] >= s_dt) & (vdf['date_str'] <= e_dt)] if not vdf.empty else pd.DataFrame()
+                if not f_edf.empty:
+                    st.download_button("📥 Export CSV", f_edf.to_csv(index=False).encode('utf-8'), f"Export_{s_dt}_to_{e_dt}.csv", "text/csv", key="t5_export_btn")
+
+        except Exception as e: st.error(f"Vault processing calculation error: {e}")
