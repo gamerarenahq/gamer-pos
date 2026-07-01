@@ -164,7 +164,6 @@ try:
     inv_res = conn.table("inventory").select("*").order('item_name').limit(10000).execute()
     raw_inv_df = pd.DataFrame(inv_res.data) if inv_res.data else pd.DataFrame(columns=inv_cols)
     
-    # Dynamic catalog overrides for accurate French Fries pricing parameters
     inv_df = raw_inv_df.copy()
     if not inv_df.empty:
         for idx, r in inv_df.iterrows():
@@ -197,7 +196,6 @@ except Exception as e:
     db_df = pd.DataFrame(columns=db_cols)
     tab_df = pd.DataFrame(columns=db_cols)
 
-# Hardcoded modeling definitions for Without-Drink (W/O) Special Combo Meals
 SPECIAL_MEALS = [
     {"id": "spec_tt", "item_name": "Tikki Tango Meal (W/O)", "selling_price": 175.0, "cost_price": 129.0, "category": "Burgers & Meals", "track_stock": False},
     {"id": "spec_pp", "item_name": "Peri Peri Mini Meal (W/O)", "selling_price": 205.0, "cost_price": 149.0, "category": "Burgers & Meals", "track_stock": False},
@@ -212,7 +210,6 @@ t1, t2, t3, t4 = st.tabs(["🕹️ Live Floor", "🍔 Cafe & Stock", "📅 Booki
 # TAB 1: LIVE FLOOR & CHECKOUT
 # ==========================================
 with t1:
-    # --- PENDING ON FLOOR METRIC ---
     pending_floor = 0.0
     if not db_df.empty:
         pending_floor = pd.to_numeric(db_df[db_df['status']=='Active']['total'], errors='coerce').fillna(0.0).sum()
@@ -327,7 +324,6 @@ with t1:
                 if st.button("🛑 Collect & Close", type="primary", key=f"t1_close_{db_state_key}"):
                     current_row_final = final_total - past_tab_amt if final_method_str != "Master Tab" else final_total
                     
-                    # Pro-rate split fractions to prevent financial cash ledger calculation loops
                     if final_method_str.startswith("Split|") and not past_tabs.empty:
                         pts = final_method_str.split('|')
                         t_cash_p = float(pts[1]); t_upi_p = float(pts[2])
@@ -565,7 +561,7 @@ with t3:
             
             if "Walk-in" in b_type:
                 sch_date = datetime.now(IST).strftime('%Y-%m-%d')
-                b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"t3_wt_{st.session_state.form_reset}")
+                b_time = st.time_input("Session Start Time", value=datetime.now(IST).time(), step=60, key=f"f3_wt_{st.session_state.form_reset}")
                 time_str = b_time.strftime("%I:%M %p")
                 final_status = "Active"; btn_txt = "🚀 Start Session Now"
             else:
@@ -640,12 +636,27 @@ with t4:
                         st.cache_data.clear(); st.success("Logged!"); st.rerun()
 
             st.divider()
-            raw_v = conn.table("sales").select("*").order('id', desc=True).limit(50000).execute()
-            vdf = pd.DataFrame(raw_v.data) if raw_v.data else pd.DataFrame(columns=db_cols)
-            cafe_res = conn.table("cafe_orders").select("*").order('id', desc=True).limit(50000).execute()
-            cafe_all_df = pd.DataFrame(cafe_res.data) if cafe_res.data else pd.DataFrame()
+            
+            # --- PAGINATION CHUNKING ENGINE: BYPASSES 1000 ROW LIMIT WALL ---
+            @st.cache_data(ttl=60)
+            def load_paginated_table(table_name):
+                all_records = []
+                start_row = 0
+                chunk_limit = 1000
+                while True:
+                    res = conn.table(table_name).select("*").order("id", desc=True).range(start_row, start_row + chunk_limit - 1).execute()
+                    if not res.data:
+                        break
+                    all_records.extend(res.data)
+                    if len(res.data) < chunk_limit:
+                        break
+                    start_row += chunk_limit
+                return pd.DataFrame(all_records)
 
-            # --- SELECT REPORT DATE ---
+            with st.spinner("Breaking row limits... Synchronizing all history since launch..."):
+                vdf = load_paginated_table("sales")
+                cafe_all_df = load_paginated_table("cafe_orders")
+
             st.write("### 📅 Daily Performance Report")
             report_date = st.date_input("Select Date for Summary", value=datetime.now(IST).date(), key="t4_rep_date")
             rep_date_str = report_date.strftime('%Y-%m-%d')
@@ -710,19 +721,15 @@ SIM- {sim_wa:,.0f}"""
             
             st.divider()
             
-            # --- OVERHAULED FINANCIAL INTELLIGENCE MATRIX ---
+            # --- MATRIX CALCULATIONS ---
             st.write("### 📈 Executive Revenue Dashboard")
             if not comp_df.empty:
                 daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index()
                 if not cafe_all_df.empty:
-                    cafe_all_df['date_str'] = cafe_all_df['date'].str[:10]
-                    cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df['total_revenue'], errors='coerce').fillna(0.0)
-                    cafe_all_df['profit'] = pd.to_numeric(cafe_all_df['profit'], errors='coerce').fillna(0.0)
                     daily_fnb = cafe_all_df.groupby('date_str').agg({'total_revenue': 'sum', 'profit': 'sum'}).reset_index()
                 else: daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
 
-                exp_raw = conn.table("expenses").select("*").order('id', desc=True).limit(50000).execute()
-                exp_df = pd.DataFrame(exp_raw.data) if exp_raw.data else pd.DataFrame()
+                exp_df = load_paginated_table("expenses")
                 if not exp_df.empty:
                     exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
                     exp_summary = exp_df.groupby('expense_date')['amount'].sum().reset_index()
@@ -755,7 +762,7 @@ SIM- {sim_wa:,.0f}"""
                 p_life = get_sum(master_ledger, 'Net Profit', mask_life); p_mtd = get_sum(master_ledger, 'Net Profit', mask_mtd)
                 p_lm = get_sum(master_ledger, 'Net Profit', mask_lm); p_wtd = get_sum(master_ledger, 'Net Profit', mask_wtd); p_lw = get_sum(master_ledger, 'Net Profit', mask_lw)
 
-                # ROW 1: GROSS INCOME BREAKDOWNS
+                # ROW 1: GROSS
                 st.write("##### 💵 Gross Revenue (Topline Income)")
                 c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Lifetime Gross", f"₹{g_life:,.0f}")
@@ -764,7 +771,7 @@ SIM- {sim_wa:,.0f}"""
                 c4.metric("This Week (WTD)", f"₹{g_wtd:,.0f}", delta=f"{((g_wtd-g_lw)/g_lw*100) if g_lw else 0:.1f}% vs Last Week")
                 c5.metric("Last Week", f"₹{g_lw:,.0f}")
 
-                # ROW 2: NET FINANCIAL ACTUAL BOTTOM LINE PROFITS
+                # ROW 2: NET PROFIT
                 st.write("##### 💰 Net Profit (Pure Game + F&B Profit - Expenses)")
                 p1, p2, p3, p4, p5 = st.columns(5)
                 p1.metric("Lifetime Profit", f"₹{p_life:,.0f}")
