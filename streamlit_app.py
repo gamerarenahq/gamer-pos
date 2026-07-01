@@ -304,7 +304,8 @@ with t1:
                     st.cache_data.clear(); st.balloons(); st.rerun()
                     
             elif op_mode == "Add Time":
-                ext = st.number_input("Extra Hrs", 0.5, 5.0, 0.5, key=f"t1_ext_hrs_{db_state_key}")
+                # THE FIX: Explicitly setting step=0.5 for the Add Time input
+                ext = st.number_input("Extra Hrs", min_value=0.5, max_value=12.0, value=0.5, step=0.5, key=f"t1_ext_hrs_{db_state_key}")
                 if st.button("➕ Extend Session", key=f"t1_ext_btn_{db_state_key}"):
                     new_dur = float(row['duration']) + float(ext)
                     orig_dur = float(row['duration'])
@@ -627,43 +628,52 @@ with t4:
             st.divider()
             
             # --- PAGINATED BULLETPROOF DATA INITIALIZATION ---
-            with st.spinner("Synchronizing all history since launch..."):
+            with st.spinner("Breaking row limits... Synchronizing all history since launch..."):
                 raw_v_data = fetch_full_table("sales")
-                raw_cafe_data = fetch_full_table("cafe_orders")
-                raw_exp_data = fetch_full_table("expenses")
+                vdf = pd.DataFrame(raw_v_data) if raw_v_data else pd.DataFrame(columns=db_cols)
+                
+                cafe_raw_data = fetch_full_table("cafe_orders")
+                cafe_all_df = pd.DataFrame(cafe_raw_data) if cafe_raw_data else pd.DataFrame()
+                
+                exp_raw_data = fetch_full_table("expenses")
+                exp_df = pd.DataFrame(exp_raw_data) if exp_raw_data else pd.DataFrame()
 
-            # 1. Sales / Gaming Data
-            vdf = pd.DataFrame(raw_v_data) if raw_v_data else pd.DataFrame(columns=['id', 'customer', 'phone', 'system', 'duration', 'total', 'method', 'entry_time', 'status', 'scheduled_date', 'fnb_total', 'fnb_items', 'date'])
-            vdf['date_str'] = vdf.get('date', pd.Series(dtype=str)).astype(str).str[:10]
+            if not vdf.empty and 'date' in vdf.columns:
+                vdf['date_str'] = vdf['date'].astype(str).str[:10]
+            else:
+                vdf['date_str'] = ''
             
-            comp_df = vdf[vdf['status'] == 'Completed'].copy() if not vdf.empty else pd.DataFrame(columns=vdf.columns)
-            comp_df['total'] = pd.to_numeric(comp_df.get('total', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
-            comp_df['fnb_total'] = pd.to_numeric(comp_df.get('fnb_total', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
-            comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
-
-            # 2. Cafe Data
-            cafe_all_df = pd.DataFrame(raw_cafe_data) if raw_cafe_data else pd.DataFrame(columns=['id', 'date', 'items', 'total_revenue', 'total_cost', 'profit', 'method'])
-            cafe_all_df['date_str'] = cafe_all_df.get('date', pd.Series(dtype=str)).astype(str).str[:10]
-            cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df.get('total_revenue', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
-            cafe_all_df['profit'] = pd.to_numeric(cafe_all_df.get('profit', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
+            comp_df = vdf[vdf['status'] == 'Completed'].copy() if not vdf.empty else pd.DataFrame(columns=db_cols + ['date_str'])
+            if not comp_df.empty:
+                comp_df['total'] = pd.to_numeric(comp_df['total'], errors='coerce').fillna(0.0)
+                comp_df['fnb_total'] = pd.to_numeric(comp_df['fnb_total'], errors='coerce').fillna(0.0)
+                comp_df['pure_game'] = comp_df['total'] - comp_df['fnb_total']
+            else:
+                comp_df['pure_game'] = 0.0
+                comp_df['date_str'] = ''
             
-            # 3. Expenses Data
-            exp_df = pd.DataFrame(raw_exp_data) if raw_exp_data else pd.DataFrame(columns=['id', 'expense_date', 'category', 'amount', 'method'])
-            exp_df['date_str'] = exp_df.get('expense_date', pd.Series(dtype=str)).astype(str).str[:10]
-            exp_df['amount'] = pd.to_numeric(exp_df.get('amount', pd.Series(dtype=float)), errors='coerce').fillna(0.0)
+            if not cafe_all_df.empty and 'date' in cafe_all_df.columns:
+                cafe_all_df['date_str'] = cafe_all_df['date'].astype(str).str[:10]
+                cafe_all_df['total_revenue'] = pd.to_numeric(cafe_all_df['total_revenue'], errors='coerce').fillna(0.0)
+                cafe_all_df['profit'] = pd.to_numeric(cafe_all_df['profit'], errors='coerce').fillna(0.0)
+                daily_fnb = cafe_all_df.groupby('date_str').agg({'total_revenue': 'sum', 'profit': 'sum'}).reset_index()
+            else:
+                daily_fnb = pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
 
-            # 4. Daily Summaries for Ledger
+            if not exp_df.empty and 'expense_date' in exp_df.columns:
+                exp_df['amount'] = pd.to_numeric(exp_df['amount'], errors='coerce').fillna(0.0)
+                exp_summary = exp_df.groupby('expense_date')['amount'].sum().reset_index()
+                exp_summary.rename(columns={'expense_date': 'date_str', 'amount': 'daily_expenses'}, inplace=True)
+            else:
+                exp_summary = pd.DataFrame(columns=['date_str', 'daily_expenses'])
+
+            # Master Ledger guaranteed to exist and have date_str
             daily_game = comp_df.groupby('date_str')['pure_game'].sum().reset_index() if not comp_df.empty else pd.DataFrame(columns=['date_str', 'pure_game'])
-            daily_fnb = cafe_all_df.groupby('date_str').agg({'total_revenue': 'sum', 'profit': 'sum'}).reset_index() if not cafe_all_df.empty else pd.DataFrame(columns=['date_str', 'total_revenue', 'profit'])
-            exp_summary = exp_df.groupby('date_str')['amount'].sum().reset_index() if not exp_df.empty else pd.DataFrame(columns=['date_str', 'amount'])
-            exp_summary.rename(columns={'amount': 'daily_expenses'}, inplace=True)
-
-            # 5. Build Master Ledger
             master_ledger = pd.merge(daily_game, daily_fnb, on='date_str', how='outer').fillna(0.0)
             master_ledger = pd.merge(master_ledger, exp_summary, on='date_str', how='outer').fillna(0.0)
             
-            master_ledger['Gross Revenue'] = master_ledger.get('pure_game', 0.0) + master_ledger.get('total_revenue', 0.0)
-            master_ledger['Net Revenue'] = master_ledger.get('pure_game', 0.0) + master_ledger.get('profit', 0.0)
+            master_ledger['Gross Revenue'] = master_ledger['pure_game'] + master_ledger.get('total_revenue', 0.0)
+            master_ledger['Net Revenue'] = master_ledger['pure_game'] + master_ledger.get('profit', 0.0)
             master_ledger['Net Profit'] = master_ledger['Net Revenue'] - master_ledger.get('daily_expenses', 0.0)
             master_ledger['date_obj'] = pd.to_datetime(master_ledger['date_str'], errors='coerce')
 
@@ -673,25 +683,27 @@ with t4:
             rep_date_str = report_date.strftime('%Y-%m-%d')
             
             # --- Compute Target Day's Data ---
-            cafe_today = cafe_all_df[cafe_all_df['date_str'] == rep_date_str] if not cafe_all_df.empty else pd.DataFrame()
-            if not cafe_today.empty:
-                gross_fnb_sale = cafe_today['total_revenue'].sum()
-                gross_fnb_profit = cafe_today['profit'].sum()
-                direct_fnb_df = cafe_today[cafe_today.get('method', '') != 'Tab']
-                direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
-            else: 
-                gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+            if not cafe_all_df.empty:
+                cafe_today = cafe_all_df[cafe_all_df['date_str'] == rep_date_str].copy()
+                if not cafe_today.empty:
+                    gross_fnb_sale = cafe_today['total_revenue'].sum()
+                    gross_fnb_profit = cafe_today['profit'].sum()
+                    direct_fnb_df = cafe_today[cafe_today['method'] != 'Tab']
+                    direct_fnb_cash, direct_fnb_upi = get_cash_upi(direct_fnb_df, 'total_revenue')
+                else: gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
+            else: gross_fnb_sale = gross_fnb_profit = direct_fnb_cash = direct_fnb_upi = 0.0
 
-            today_comp = comp_df[comp_df['date_str'] == rep_date_str] if not comp_df.empty else pd.DataFrame()
-            if not today_comp.empty:
+            if not comp_df.empty:
+                today_comp = comp_df[comp_df['date_str'] == rep_date_str].copy()
                 checkout_cash, checkout_upi = get_cash_upi(today_comp, 'total')
                 pure_game_rev = today_comp['pure_game'].sum()
+                
                 hw_map_wa = {"PS1":"PS5", "PS2":"PS5", "PS3":"PS5", "PC1":"PC", "PC2":"PC", "SIM1":"SIM"}
-                today_comp['Category'] = today_comp.get('system', pd.Series(dtype=str)).map(hw_map_wa).fillna(today_comp.get('system', pd.Series(dtype=str)))
-                today_hw_group = today_comp.groupby('Category')['pure_game'].sum()
+                today_comp['Category'] = today_comp['system'].map(hw_map_wa).fillna(today_comp['system'])
+                today_hw_group = today_comp.groupby('Category')['pure_game'].sum() if not today_comp.empty else {}
                 ps_wa = today_hw_group.get('PS5', 0.0); pc_wa = today_hw_group.get('PC', 0.0); sim_wa = today_hw_group.get('SIM', 0.0)
             else:
-                checkout_cash = checkout_upi = pure_game_rev = 0.0
+                today_comp = pd.DataFrame(); checkout_cash = checkout_upi = pure_game_rev = 0.0
                 ps_wa = pc_wa = sim_wa = 0.0
 
             total_drawer_cash = checkout_cash + direct_fnb_cash
@@ -781,7 +793,7 @@ SIM- {sim_wa:,.0f}"""
                 row_fnb_s[p_name] = f"₹{sub_ledger.get('total_revenue', pd.Series([0])).sum():,.0f}" if not sub_ledger.empty else "₹0"
                 row_fnb_p[p_name] = f"₹{sub_ledger.get('profit', pd.Series([0])).sum():,.0f}" if not sub_ledger.empty else "₹0"
                 row_exp[p_name] = f"₹{sub_ledger.get('daily_expenses', pd.Series([0])).sum():,.0f}" if not sub_ledger.empty else "₹0"
-                row_net[p_name] = f"₹{sub_ledger.get('Net Profit', pd.Series([0])).sum():,.0f}" if not sub_ledger.empty else "₹0"
+                row_net[p_name] = f"₹{sub_ledger['Net Profit'].sum():,.0f}" if not sub_ledger.empty else "₹0"
 
             exec_df = pd.DataFrame([row_gross, row_game, row_fnb_s, row_fnb_p, row_exp, row_net])
             st.dataframe(exec_df, hide_index=True, use_container_width=True)
